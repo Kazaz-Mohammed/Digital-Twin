@@ -1,0 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* Dark Theme */
+  --bg-dark-main: #0c0d12;
+  --bg-panel: #17181e;
+  --bg-card-dark: #1f2026;
+  --border-panel: #2a2b33;
+  
+  --text-main: #e2e8f0;
+  --text-muted: #8a8d9a;
+  
+  --accent-cyan: #00f0ff;
+  --accent-green: #00e676;
+  --accent-yellow: #ffd600;
+  --accent-red: #ff3d00;
+  
+  --font-sans: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* Light Theme Variables */
+.theme-light {
+  --bg-dark-main: #f1f5f9;
+  --bg-panel: #ffffff;
+  --bg-card-dark: #f8fafc;
+  --border-panel: #cbd5e1;
+  
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  
+  /* Retain accents, possibly tone them down slightly for white contrast if desired */
+  --border-glass: rgba(15, 23, 42, 0.08);
+}
+
+body {
+  background-color: var(--bg-dark-main);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  height: 100vh;
+  margin: 0;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-dark-main);
+}
+::-webkit-scrollbar-thumb {
+  background: #3a3b45;
+  border-radius: 2px;
+}
+
+/* Panel Card style */
+.dashboard-panel {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 6px;
+  padding: 12px;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+.dashboard-panel-header {
+  border-bottom: 1px solid var(--border-panel);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Progress Ring SVG styles */
+.progress-ring-circle {
+  transition: stroke-dashoffset 0.35s;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+
+/* Orbit Controller Layout */
+.orbit-control-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+/* Theme Text Helpers */
+.theme-text-primary {
+  color: var(--text-main) !important;
+}
+
+.theme-text-muted {
+  color: var(--text-muted) !important;
+}
+
+.hud-panel {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+

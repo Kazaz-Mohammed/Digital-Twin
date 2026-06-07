@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+ENV/
+
+# OS/IDEs
+.DS_Store
+.vscode/
+.idea/
+
+# Local/Temp Files
+temp_*
+**/temp_*
+**/app/temp_*
+*temp*
+*.tmp
+
+# Large files
+*.fbx
+*.pt
+*.zip
+*.mp4

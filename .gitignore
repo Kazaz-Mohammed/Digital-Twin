@@ -1,0 +1,55 @@
+# Ignore everything in the root by default
+/*
+
+# Whitelist the two specific project directories
+!/industrial-digital-twin/
+!/digitization-of-piping-and-instrument-diagrams-main/
+
+# Whitelist the root gitignore itself
+!.gitignore
+
+# Universal ignores inside the subdirectories
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/*.tsbuildinfo
+**/next-env.d.ts
+
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/*.pt
+**/*.fbx
+**/*.zip
+**/*.mp4
+**/*.avi
+**/*.mov
+**/*.pdf
+**/*.docx
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.webp
+**/*.gif
+
+# EXCEPT whitelist specific UI icons/images in frontend public folder if needed
+!**/frontend/public/**/*.svg
+!**/frontend/public/**/*.png
+!**/frontend/public/**/*.jpg
+!**/frontend/public/**/*.ico
+
+# EXCEPT whitelist sample test/source images needed for digitization
+!**/digitization-of-piping-and-instrument-diagrams-main/crop_*.jpg
+
+# OS/IDE configs
+**/.DS_Store
+**/.vscode/
+**/.idea/
+**/.env
+**/.env.local
+**/.env.development.local
+**/.env.test.local
+**/.env.production.local
+**/temp_*
+**/app/temp_*
