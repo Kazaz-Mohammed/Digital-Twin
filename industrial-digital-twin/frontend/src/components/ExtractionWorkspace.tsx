@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, MouseEvent, useEffect } from "react";
+import { useDigitalTwin } from "../context/DigitalTwinContext";
 
 interface EdgeItem {
   source: string;
@@ -31,7 +32,7 @@ interface BBox {
   tag?: string;
 }
 
-interface LineSegment {
+export interface LineSegment {
   id: string;
   startX: number;
   startY: number;
@@ -39,36 +40,71 @@ interface LineSegment {
   endY: number;
 }
 
-export default function ExtractionWorkspace() {
-  const [fileUploaded, setFileUploaded] = useState(false);
-  const [isExtracting, setIsExtracting] = useState(false);
-  const [bboxes, setBboxes] = useState<BBox[]>([]);
-  const [progress, setProgress] = useState({ percent: 0, status: "Initializing extraction..." });
-  const [lines, setLines] = useState<LineSegment[]>([]);
-  const [selectedBox, setSelectedBox] = useState<BBox | null>(null);
-  const [editLabel, setEditLabel] = useState("");
-  const [editTag, setEditTag] = useState("");
-  const [selectedLine, setSelectedLine] = useState<LineSegment | null>(null);
-  const [currentLine, setCurrentLine] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
+const PUMP_SCHEMA = [
+  "Nominal Motor Power (kW)",
+  "Nominal Motor Current (A)",
+  "Nominal Motor Voltage (V)",
+  "Maximum Motor Speed (tr/min)",
+  "Pump Max Flow (l/s)"
+];
 
-  // States for Extracted Topology Graph View
-  const [workspaceView, setWorkspaceView] = useState<"image" | "topology">("image");
-  const [graphData, setGraphData] = useState<{ nodes: any[]; edges: any[] } | null>(null);
-  const [graphPositions, setGraphPositions] = useState<Record<string, { x: number; y: number }>>({}); 
-  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+const SOLENOID_VALVE_SCHEMA = [
+  "Voltage range",
+  "Modulating control",
+  "Operating time",
+  "Maximum break torque",
+  "Maximum operating torque",
+  "IP Rating",
+  "Working angle",
+  "Motor switches",
+  "End of travel confirmation",
+  "Heater",
+  "Ambient temperature range",
+  "Electrical connecting plugs",
+  "Weight"
+];
+
+const getDynamicSchema = (label: string) => {
+  const l = label.toLowerCase();
+  if (l.includes("pump")) return PUMP_SCHEMA;
+  if (l.includes("valve") || l.includes("solenoid")) return SOLENOID_VALVE_SCHEMA;
+  return ["Manufacturer", "Installation Date"];
+};
+
+export default function ExtractionWorkspace() {
+  // All persistent extraction state lives in the global context so it survives
+  // tab switches, panel expand/minimize, and component unmounts.
+  const {
+    fileUploaded, setFileUploaded,
+    isExtracting, setIsExtracting,
+    bboxes, setBboxes,
+    progress, setProgress,
+    lines, setLines,
+    selectedBox, setSelectedBox,
+    editLabel, setEditLabel,
+    editTag, setEditTag,
+    selectedLine, setSelectedLine,
+    currentLine, setCurrentLine,
+    imageSrc, setImageSrc,
+    hoveredBoxId, setHoveredBoxId,
+    workspaceView, setWorkspaceView,
+    graphData, setGraphData,
+    graphPositions, setGraphPositions,
+    draggingNodeId, setDraggingNodeId,
+    gZoom, setGZoom,
+    gPan, setGPan,
+    zoom, setZoom,
+    pan, setPan,
+  } = useDigitalTwin();
+
+  // Purely local transient UI states (don't need to persist across mounts)
   const [graphHeight, setGraphHeight] = useState(300);
   const [graphWidth, setGraphWidth] = useState(800);
   const graphSvgRef = useRef<SVGSVGElement>(null);
   const graphContainerRef = useRef<HTMLDivElement>(null);
-
-  // Graph zoom & pan
-  const [gZoom, setGZoom] = useState(1);
-  const [gPan, setGPan] = useState({ x: 0, y: 0 });
   const [gIsPanning, setGIsPanning] = useState(false);
   const [gPanStart, setGPanStart] = useState({ x: 0, y: 0 });
-  
+
   // States for manual drawing
   const canvasRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -76,13 +112,45 @@ export default function ExtractionWorkspace() {
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [currentBox, setCurrentBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  // Zoom & Pan states
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Zoom & Pan transient states
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  const [interactionMode, setInteractionMode] = useState<"draw" | "pan">("draw");
+  const [interactionMode, setInteractionMode] = useState<"draw" | "pan" | "line">("draw");
 
+  // Dynamic Properties states
+  const [editCustomProps, setEditCustomProps] = useState<Record<string, string>>({});
+  const [isParsingDatasheet, setIsParsingDatasheet] = useState(false);
+  const datasheetInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (selectedBox) {
+      setEditCustomProps(selectedBox.customProperties || {});
+    } else {
+      setEditCustomProps({});
+    }
+  }, [selectedBox]);
+
+  // Publishing transient states
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishSuccess, setPublishSuccess] = useState(false);
+
+  const handlePublishAAS = async () => {
+    setIsPublishing(true);
+    try {
+      const payload = bboxes.map(b => ({ sid: b.tag || b.label, props: b.customProperties || {} })).filter(b => b.sid);
+      await fetch("http://localhost:8000/api/aas/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: payload })
+      });
+      setIsPublishing(false);
+      setPublishSuccess(true);
+      setTimeout(() => setPublishSuccess(false), 5000);
+    } catch (err) {
+      console.error(err);
+      setIsPublishing(false);
+    }
+  };
   const processFile = async (file: File) => {
     if (file.type.startsWith("image/")) {
       const url = URL.createObjectURL(file);
@@ -94,18 +162,23 @@ export default function ExtractionWorkspace() {
     setIsExtracting(true);
     setProgress({ percent: 0, status: "Uploading drawing to pipeline..." });
 
-    // Start progress polling interval
+    // Start progress polling interval — only ever allow progress to move forward
+    const highWaterMark = { current: 0 };
     const pollInterval = setInterval(async () => {
       try {
         const res = await fetch("http://localhost:8000/api/extract/progress");
         if (res.ok) {
           const progressData = await res.json();
-          setProgress(progressData);
+          // Only update if the new percent is >= what we've already shown
+          if (progressData.percent >= highWaterMark.current) {
+            highWaterMark.current = progressData.percent;
+            setProgress(progressData);
+          }
         }
       } catch (err) {
         console.error("Progress polling error:", err);
       }
-    }, 1000);
+    }, 800);
 
     try {
       const formData = new FormData();
@@ -416,9 +489,9 @@ export default function ExtractionWorkspace() {
   const handleSaveLabel = () => {
     if (!selectedBox) return;
     setBboxes((prev) =>
-      prev.map((box) => (box.id === selectedBox.id ? { ...box, label: editLabel, tag: editTag } : box))
+      prev.map((box) => (box.id === selectedBox.id ? { ...box, label: editLabel, tag: editTag, customProperties: editCustomProps } : box))
     );
-    setSelectedBox((prev) => (prev ? { ...prev, label: editLabel, tag: editTag } : null));
+    setSelectedBox(selectedBox ? { ...selectedBox, label: editLabel, tag: editTag, customProperties: editCustomProps } : null);
   };
 
   // Remove Bounding Box
@@ -471,7 +544,7 @@ export default function ExtractionWorkspace() {
         const nodeIds = topology.nodes.map((n: any) => n.id);
         for (let iter = 0; iter < 50; iter++) {
           const forces: Record<string, { fx: number; fy: number }> = {};
-          nodeIds.forEach(id => { forces[id] = { fx: 0, fy: 0 }; });
+          nodeIds.forEach((id: string) => { forces[id] = { fx: 0, fy: 0 }; });
 
           // Repulsion between all nodes
           for (let i = 0; i < nodeIds.length; i++) {
@@ -512,7 +585,7 @@ export default function ExtractionWorkspace() {
 
           // Apply forces
           const damping = 0.3;
-          nodeIds.forEach(id => {
+          nodeIds.forEach((id: string) => {
             positions[id] = {
               x: positions[id].x + forces[id].fx * damping,
               y: positions[id].y + forces[id].fy * damping
@@ -604,10 +677,10 @@ export default function ExtractionWorkspace() {
       const rect = container.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-      setGPan(prev => ({
-        x: mx - (mx - prev.x) * (nextZoom / gZoom),
-        y: my - (my - prev.y) * (nextZoom / gZoom)
-      }));
+      setGPan({
+        x: mx - (mx - gPan.x) * (nextZoom / gZoom),
+        y: my - (my - gPan.y) * (nextZoom / gZoom)
+      });
       setGZoom(nextZoom);
     };
     
@@ -691,6 +764,117 @@ export default function ExtractionWorkspace() {
           {edge.label.toUpperCase()}
         </text>
       </g>
+    );
+  };
+  const renderDynamicProp = (prop: string) => {
+    const value = editCustomProps[prop] || "";
+    
+    if (prop === "Modulating control" || prop === "End of travel confirmation") {
+      return (
+        <div key={prop} className="flex flex-col gap-0.5">
+          <label className="text-[8px] text-[var(--text-muted)] font-mono">{prop}</label>
+          <select 
+            value={value} 
+            onChange={(e) => setEditCustomProps(prev => ({ ...prev, [prop]: e.target.value }))}
+            className="w-full px-2 py-1 bg-[var(--bg-card-dark)] border border-[var(--border-panel)] rounded text-[10px] text-emerald-400 focus:outline-none focus:border-cyan-500 font-mono font-bold"
+          >
+            <option value="">Select...</option>
+            <option value="Yes">Yes</option>
+            <option value="No">No</option>
+          </select>
+        </div>
+      );
+    }
+
+    if (prop === "Ambient temperature range") {
+      const parts = value.replace('°C', '').split('to').map(s => s.trim());
+      const min = parts[0] || "";
+      const max = parts[1] || "";
+      return (
+        <div key={prop} className="flex flex-col gap-0.5">
+          <label className="text-[8px] text-[var(--text-muted)] font-mono">{prop}</label>
+          <div className="flex items-center gap-1">
+            <input 
+              type="number" 
+              value={min}
+              placeholder="Min"
+              onChange={(e) => setEditCustomProps(prev => ({ ...prev, [prop]: `${e.target.value} to ${max} °C`.trim() }))}
+              className="w-full px-2 py-1 bg-[var(--bg-card-dark)] border border-[var(--border-panel)] rounded text-[10px] text-emerald-400 focus:outline-none focus:border-cyan-500 font-mono text-center font-bold"
+            />
+            <span className="text-[10px] text-gray-500 font-bold">to</span>
+            <input 
+              type="number" 
+              value={max}
+              placeholder="Max"
+              onChange={(e) => setEditCustomProps(prev => ({ ...prev, [prop]: `${min} to ${e.target.value} °C`.trim() }))}
+              className="w-full px-2 py-1 bg-[var(--bg-card-dark)] border border-[var(--border-panel)] rounded text-[10px] text-emerald-400 focus:outline-none focus:border-cyan-500 font-mono text-center font-bold"
+            />
+            <span className="text-[10px] text-gray-400 font-mono shrink-0 w-4">°C</span>
+          </div>
+        </div>
+      );
+    }
+
+    const unitMatch = prop.match(/\(([^)]+)\)$/);
+    let implicitUnit = "";
+    if (prop.toLowerCase().includes("torque")) implicitUnit = "Nm";
+    else if (prop.toLowerCase().includes("weight")) implicitUnit = "kg";
+    else if (prop.toLowerCase().includes("operating time")) implicitUnit = "s";
+    else if (prop.toLowerCase().includes("voltage")) implicitUnit = "V";
+
+    if (unitMatch || implicitUnit) {
+      const defaultUnit = unitMatch ? unitMatch[1] : implicitUnit;
+      const valMatch = value.match(/^([\d.]+)\s*(.*)$/);
+      const num = valMatch ? valMatch[1] : value;
+      const currentUnit = (valMatch && valMatch[2]) ? valMatch[2] : defaultUnit;
+
+      let unitOptions = [defaultUnit];
+      if (defaultUnit === "kW") unitOptions = ["W", "kW", "MW", "HP"];
+      else if (defaultUnit === "A") unitOptions = ["mA", "A", "kA"];
+      else if (defaultUnit === "V") unitOptions = ["mV", "V", "kV", "V DC", "V AC", "V AC/DC"];
+      else if (defaultUnit === "tr/min") unitOptions = ["rpm", "tr/min", "Hz"];
+      else if (defaultUnit === "l/s") unitOptions = ["l/s", "l/m", "m3/h", "gpm"];
+      else if (defaultUnit === "Nm") unitOptions = ["Nm", "lb-ft", "kg-m"];
+      else if (defaultUnit === "kg") unitOptions = ["g", "kg", "lbs", "t"];
+      else if (defaultUnit === "s") unitOptions = ["ms", "s", "min"];
+
+      // If currentUnit is not in options, add it
+      if (currentUnit && !unitOptions.includes(currentUnit)) {
+        unitOptions.push(currentUnit);
+      }
+
+      return (
+        <div key={prop} className="flex flex-col gap-0.5">
+          <label className="text-[8px] text-[var(--text-muted)] font-mono">{prop.replace(/\([^)]+\)$/, '').trim()}</label>
+          <div className="flex gap-1">
+            <input 
+              type="number" 
+              value={num}
+              onChange={(e) => setEditCustomProps(prev => ({ ...prev, [prop]: `${e.target.value} ${currentUnit}`.trim() }))}
+              className="flex-1 px-2 py-1 bg-[var(--bg-card-dark)] border border-[var(--border-panel)] rounded text-[10px] text-emerald-400 focus:outline-none focus:border-cyan-500 font-mono font-bold"
+            />
+            <select
+              value={currentUnit}
+              onChange={(e) => setEditCustomProps(prev => ({ ...prev, [prop]: `${num} ${e.target.value}`.trim() }))}
+              className="w-[55px] px-1 py-1 bg-[var(--bg-card-dark)] border border-[var(--border-panel)] rounded text-[9px] text-gray-400 focus:outline-none focus:border-cyan-500 font-mono"
+            >
+              {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={prop} className="flex flex-col gap-0.5">
+        <label className="text-[8px] text-[var(--text-muted)] font-mono">{prop}</label>
+        <input
+          type={prop === "Installation Date" ? "date" : "text"}
+          value={value}
+          onChange={(e) => setEditCustomProps(prev => ({ ...prev, [prop]: e.target.value }))}
+          className="w-full px-2 py-1 bg-[var(--bg-card-dark)] border border-[var(--border-panel)] rounded text-[10px] text-emerald-400 focus:outline-none focus:border-cyan-500 font-mono font-bold"
+        />
+      </div>
     );
   };
 
@@ -815,8 +999,8 @@ export default function ExtractionWorkspace() {
               <div className="p-2 border-b border-[var(--border-panel)] bg-[var(--bg-card-dark)]/50 flex items-center justify-between no-draw">
                 <span className="text-[10px] font-bold theme-text-primary uppercase tracking-wider font-mono">P&ID Extracted Topology Graph</span>
                 <div className="flex items-center gap-1.5">
-                  <button onClick={() => setGZoom(z => Math.min(z * 1.3, 8))} className="px-1.5 py-0.5 text-[9px] font-mono bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-white">+</button>
-                  <button onClick={() => setGZoom(z => Math.max(z / 1.3, 0.15))} className="px-1.5 py-0.5 text-[9px] font-mono bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-white">−</button>
+                  <button onClick={() => setGZoom(Math.min(gZoom * 1.3, 8))} className="px-1.5 py-0.5 text-[9px] font-mono bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-white">+</button>
+                  <button onClick={() => setGZoom(Math.max(gZoom / 1.3, 0.15))} className="px-1.5 py-0.5 text-[9px] font-mono bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-white">−</button>
                   <button onClick={fitGraphToView} className="px-1.5 py-0.5 text-[9px] font-mono bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-white">Fit</button>
                   <button onClick={resetGraphView} className="px-1.5 py-0.5 text-[9px] font-mono bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-white">Reset</button>
                   <span className="text-[8px] text-[var(--text-muted)] font-mono ml-1">{Math.round(gZoom * 100)}%</span>
@@ -1109,7 +1293,7 @@ export default function ExtractionWorkspace() {
                 </button>
                 <div className="w-[1px] h-3 bg-gray-800 mx-1" />
                 <button
-                  onClick={() => setZoom((z) => Math.min(z * 1.2, 5))}
+                  onClick={() => setZoom(Math.min(zoom * 1.2, 5))}
                   className="p-1 rounded text-gray-400 hover:text-white transition-all flex items-center justify-center"
                   title="Zoom In"
                 >
@@ -1121,7 +1305,7 @@ export default function ExtractionWorkspace() {
                   </svg>
                 </button>
                 <button
-                  onClick={() => setZoom((z) => Math.max(z / 1.2, 0.5))}
+                  onClick={() => setZoom(Math.max(zoom / 1.2, 0.5))}
                   className="p-1 rounded text-gray-400 hover:text-white transition-all flex items-center justify-center"
                   title="Zoom Out"
                 >
@@ -1238,6 +1422,141 @@ export default function ExtractionWorkspace() {
                   />
                 </div>
 
+                {/* Dynamic Properties */}
+                <div className="space-y-1.5 pt-2 border-t border-[var(--border-panel)] mt-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[8.5px] text-[var(--text-muted)] font-semibold uppercase">Technical / Operational Data</label>
+                  </div>
+                  
+                  {getDynamicSchema(editLabel).map((prop) => renderDynamicProp(prop))}
+
+                  {(editCustomProps["Max Pressure"] || editCustomProps["Max Temperature"]) && (
+                    <div className="bg-[var(--bg-card-dark)] p-2 rounded border border-[var(--border-panel)] mt-2">
+                      <span className="text-[8px] text-[var(--text-muted)] uppercase block font-semibold mb-1">Technical Limits (From Model Specs)</span>
+                      <div className="flex gap-4 text-[10px] font-mono">
+                        {editCustomProps["Max Temperature"] && <div><span className="text-amber-500 font-bold">Max Temp:</span> <span className="text-amber-400">{editCustomProps["Max Temperature"]}</span></div>}
+                        {editCustomProps["Max Pressure"] && <div><span className="text-emerald-500 font-bold">Max Press:</span> <span className="text-emerald-400">{editCustomProps["Max Pressure"]}</span></div>}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Datasheet Upload Simulation */}
+                  <div className="pt-2 space-y-1">
+                    {editCustomProps["_datasheetFileName"] && (
+                      <div className="bg-indigo-950/30 border border-indigo-500/20 p-1.5 rounded flex items-center justify-between text-[9px] font-mono">
+                        <div className="flex items-center gap-1.5 overflow-hidden">
+                          <svg viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" strokeWidth="2" fill="none" className="text-indigo-400 shrink-0">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                          </svg>
+                          <span className="text-indigo-200 truncate">{editCustomProps["_datasheetFileName"]}</span>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            setEditCustomProps(prev => {
+                              const next = { ...prev };
+                              delete next["_datasheetFileName"];
+                              delete next["_datasheetMimeType"];
+                              return next;
+                            });
+                          }}
+                          className="text-gray-500 hover:text-red-400 p-0.5"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                    <input 
+                      type="file" 
+                      accept=".pdf,.txt" 
+                      ref={datasheetInputRef} 
+                      className="hidden" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setIsParsingDatasheet(true);
+                          
+                          const processFile = (textContent: string | null) => {
+                            setTimeout(() => {
+                              const schema = getDynamicSchema(editLabel);
+                              const newValues: Record<string, string> = {};
+                              
+                              if (textContent) {
+                                // Actual rudimentary text parser!
+                                const lines = textContent.split('\n');
+                                for (const prop of schema) {
+                                  const baseProp = prop.split('(')[0].trim().toLowerCase();
+                                  const match = lines.find(l => l.toLowerCase().includes(baseProp));
+                                  if (match) {
+                                    const valMatch = match.match(/[:=]\s*(.+)/);
+                                    if (valMatch) {
+                                      newValues[prop] = valMatch[1].trim();
+                                    }
+                                  }
+                                }
+                              }
+                              
+                              // Fallback to mock values if parsing failed or it's a PDF
+                              if (Object.keys(newValues).length === 0) {
+                                if (schema === PUMP_SCHEMA) {
+                                  newValues["Nominal Motor Power (kW)"] = "75.0";
+                                  newValues["Nominal Motor Current (A)"] = "135";
+                                  newValues["Nominal Motor Voltage (V)"] = "400";
+                                  newValues["Maximum Motor Speed (tr/min)"] = "1450";
+                                  newValues["Pump Max Flow (l/s)"] = "120";
+                                } else if (schema === SOLENOID_VALVE_SCHEMA) {
+                                  newValues["Voltage range"] = "24-240V AC/DC";
+                                  newValues["Modulating control"] = "4-20mA";
+                                  newValues["Operating time"] = "12s";
+                                  newValues["Maximum break torque"] = "60 Nm";
+                                  newValues["Maximum operating torque"] = "55 Nm";
+                                  newValues["IP Rating"] = "IP67";
+                                  newValues["Working angle"] = "90°";
+                                  newValues["Weight"] = "2.5 kg";
+                                } else {
+                                  newValues["Manufacturer"] = "Flowserve";
+                                  newValues["Installation Date"] = new Date().toISOString().split('T')[0];
+                                  newValues["Max Pressure"] = "8 bar";
+                                  newValues["Max Temperature"] = "90 °C";
+                                }
+                              }
+                              
+                              newValues["_datasheetFileName"] = file.name;
+                              newValues["_datasheetMimeType"] = file.type || "application/pdf";
+                              
+                              setEditCustomProps(prev => ({ ...prev, ...newValues }));
+                              setIsParsingDatasheet(false);
+                              if (datasheetInputRef.current) datasheetInputRef.current.value = "";
+                            }, 1500);
+                          };
+
+                          if (file.type === "text/plain") {
+                            const reader = new FileReader();
+                            reader.onload = (event) => processFile(event.target?.result as string);
+                            reader.readAsText(file);
+                          } else {
+                            processFile(null);
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => datasheetInputRef.current?.click()}
+                      disabled={isParsingDatasheet}
+                      className="w-full py-1.5 bg-indigo-950/20 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 text-[9px] uppercase font-bold rounded cursor-pointer transition-colors flex items-center justify-center gap-1"
+                    >
+                      {isParsingDatasheet ? (
+                        <>
+                          <div className="w-2 h-2 rounded-full border-t border-indigo-400 animate-spin" />
+                          Extracting...
+                        </>
+                      ) : (
+                        "Upload Datasheet (PDF/TXT)"
+                      )}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex gap-1.5 pt-1">
                   <button
                     onClick={handleSaveLabel}
@@ -1262,8 +1581,18 @@ export default function ExtractionWorkspace() {
 
           {fileUploaded && (
             <div className="pt-2 mt-1.5 border-t border-[var(--border-panel)] bg-[var(--bg-panel)]">
-              <button className="w-full py-1.5 bg-emerald-950/20 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[9px] uppercase font-bold rounded tracking-widest cursor-pointer transition-colors">
-                Publish to AAS
+              <button 
+                onClick={handlePublishAAS}
+                disabled={isPublishing || publishSuccess}
+                className={`w-full py-1.5 border text-[9px] uppercase font-bold rounded tracking-widest transition-all duration-300 ${
+                  publishSuccess 
+                    ? "bg-emerald-500/40 border-emerald-400 text-emerald-100" 
+                    : isPublishing
+                    ? "bg-emerald-950/40 border-emerald-500/50 text-emerald-400/50 cursor-not-allowed animate-pulse"
+                    : "bg-emerald-950/20 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-400 cursor-pointer"
+                }`}
+              >
+                {publishSuccess ? "✓ AAS MODELS PUBLISHED" : isPublishing ? "PUBLISHING TO REGISTRY..." : "PUBLISH TO AAS"}
               </button>
             </div>
           )}

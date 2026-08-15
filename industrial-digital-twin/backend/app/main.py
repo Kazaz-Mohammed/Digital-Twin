@@ -2,7 +2,7 @@ import asyncio
 import random
 import time
 from typing import List, Dict, Any
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -88,22 +88,31 @@ async def extract_pid_data(
     temp_dir = tempfile.mkdtemp()
     temp_file_path = os.path.join(temp_dir, file.filename)
     
-    # Reset progress file in temp directory (avoids uvicorn reload loop)
+    # Signal that extraction has started — write 1% so frontend polling sees it begin.
+    # yolo_inference.py will then write 5%, 15%, 25%... up to 100%.
+    # Never reset to 0% here — that causes the "progress goes backwards" bug.
     try:
         progress_path = os.path.join(tempfile.gettempdir(), "pid_extraction_progress.json")
         with open(progress_path, "w") as f:
-            json.dump({"percent": 0, "status": "Initializing extraction..."}, f)
+            json.dump({"percent": 1, "status": "Receiving P&ID drawing..."}, f)
     except Exception:
         pass
 
     try:
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        # Signal file received, subprocess about to launch
+        try:
+            with open(progress_path, "w") as f:
+                json.dump({"percent": 3, "status": "Launching AI extraction pipeline..."}, f)
+        except Exception:
+            pass
             
         python_exe = sys.executable
         default_model_path = os.path.abspath(os.path.join(
             os.path.dirname(__file__),
-            "..", "..", "..", "MLOpsManufacturing-main", "samples", "amlv2_pid_symbol_detection_train", "src", "app", "runs", "detect", "train-7", "weights", "best.pt"
+            "..", "..", "..", "MLOpsManufacturing-main", "samples", "amlv2_pid_symbol_detection_train", "src", "app", "runs", "detect", "train-7", "weights", "best_backup_32class.pt"
         ))
         model_path = os.getenv("YOLO_MODEL_PATH", default_model_path)
         script_path = os.path.join(os.path.dirname(__file__), "yolo_inference.py")
@@ -311,6 +320,114 @@ async def get_aas_hierarchy():
         return fallback_data
 
 
+MOCK_PUBLISHED_SHELLS = []
+MOCK_PUBLISHED_SUBMODELS = {}
+
+@app.post("/api/aas/publish")
+async def publish_shells(req: Request):
+    global MOCK_PUBLISHED_SHELLS, MOCK_PUBLISHED_SUBMODELS
+    data = await req.json()
+    items = data.get("items", [])
+    
+    shells = []
+    seen = {}
+    MOCK_PUBLISHED_SUBMODELS.clear()
+    
+    for item in items:
+        if isinstance(item, dict):
+            base_sid = item.get("sid", "Unknown")
+            props = item.get("props", {})
+        else:
+            base_sid = item
+            props = {}
+            
+        sid = base_sid
+        if base_sid in seen:
+            seen[base_sid] += 1
+            sid = f"{base_sid}_{seen[base_sid]}"
+        else:
+            seen[base_sid] = 1
+            
+        shells.append({
+            "id": f"https://jesa.ma/aas/{sid}",
+            "idShort": sid,
+            "assetInformation": {
+                "assetKind": "Instance",
+                "globalAssetId": f"https://jesa.ma/assets/{sid}"
+            }
+        })
+        
+        # Build custom TechnicalData Submodel
+        submodelElements = []
+        for k, v in props.items():
+            if k == "_datasheetFileName":
+                submodelElements.append({
+                    "idShort": "Datasheet",
+                    "modelType": "File",
+                    "mimeType": props.get("_datasheetMimeType", "application/pdf"),
+                    "value": f"/files/datasheets/{v}"
+                })
+            elif k == "_datasheetMimeType":
+                continue
+            else:
+                submodelElements.append({
+                    "idShort": k.replace(" ", "").replace("(", "").replace(")", "").replace("/", "").replace("-", ""),
+                    "modelType": "Property",
+                    "valueType": "xs:string",
+                    "value": str(v)
+                })
+            
+        MOCK_PUBLISHED_SUBMODELS[sid] = [
+            {
+                "idShort": "TechnicalData",
+                "id": f"https://jesa.ma/aas/{sid}/submodels/TechnicalData",
+                "modelType": "Submodel",
+                "submodelElements": submodelElements
+            },
+            {
+                "idShort": "OperationalData",
+                "id": f"https://jesa.ma/aas/{sid}/submodels/OperationalData",
+                "modelType": "Submodel",
+                "submodelElements": [
+                    {"idShort": "CurrentTemperature", "modelType": "Property", "valueType": "xs:double", "value": "42.5"},
+                    {"idShort": "CurrentPressure", "modelType": "Property", "valueType": "xs:double", "value": "4.2"}
+                ]
+            },
+            {
+                "idShort": "TimeSeries",
+                "id": f"https://jesa.ma/aas/{sid}/submodels/TimeSeries",
+                "modelType": "Submodel",
+                "submodelElements": [
+                    {
+                        "idShort": "Segments",
+                        "modelType": "SubmodelElementCollection",
+                        "value": [
+                            {
+                                "idShort": "CurrentTemperatureSegment",
+                                "modelType": "SubmodelElementCollection",
+                                "value": [
+                                    {"idShort": "Min", "modelType": "Property", "valueType": "xs:double", "value": "20.0"},
+                                    {"idShort": "Max", "modelType": "Property", "valueType": "xs:double", "value": "95.0"}
+                                ]
+                            },
+                            {
+                                "idShort": "CurrentPressureSegment",
+                                "modelType": "SubmodelElementCollection",
+                                "value": [
+                                    {"idShort": "Min", "modelType": "Property", "valueType": "xs:double", "value": "1.0"},
+                                    {"idShort": "Max", "modelType": "Property", "valueType": "xs:double", "value": "16.0"}
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+        
+    MOCK_PUBLISHED_SHELLS = shells
+    return {"status": "ok", "published_count": len(shells)}
+
+
 @app.get("/api/aas/shells")
 async def get_shells():
     """Serves the list of AAS shells from BaSyx server, falling back to static assets if empty or offline."""
@@ -324,6 +441,9 @@ async def get_shells():
     except Exception:
         pass
     
+    if MOCK_PUBLISHED_SHELLS:
+        return MOCK_PUBLISHED_SHELLS
+        
     return [
         {
             "id": f"https://jesa.ma/aas/{sid}",
@@ -342,6 +462,9 @@ async def get_shells():
 
 @app.get("/api/aas/shells/{shell_id_short}/submodels")
 async def get_shell_submodels(shell_id_short: str):
+    if shell_id_short in MOCK_PUBLISHED_SUBMODELS:
+        return MOCK_PUBLISHED_SUBMODELS[shell_id_short]
+        
     """Serves the detailed submodels (TechnicalData, OperationalData, TimeSeries) for a given shell."""
     manufacturer = "Siemens"
     if "TNK" in shell_id_short:
@@ -590,3 +713,233 @@ async def telemetry_stream(websocket: WebSocket):
           await asyncio.sleep(1.2)
     except WebSocketDisconnect:
         pass
+
+# --- SIMULATION MOCK ENDPOINTS ---
+
+class MockSimulation:
+    def __init__(self):
+        self.tank_max_capacity = 1000.0
+        self.pmp001_max_flow = 50.0
+        self.pmp002_max_flow = 50.0
+        self.lah_limit = 90.0
+        self.lal_limit = 10.0
+        self.pmp_nominal_voltage = 400.0
+        self.pmp_nominal_power = 4.0
+        self.pmp_max_rpm = 1500.0
+        self.ambient_temp = 25.0
+        
+        self.tank_level = 500.0
+        self.pmp001_speed = 50.0
+        self.pmp002_speed = 40.0
+        self.v001_open = True
+        self.interlock_tripped = False
+        self.prev_in_alarm = False
+
+        self.pit001_pressure = 2.0
+        self.lit001_pct = 50.0
+        self.fit001_flow = 20.0
+        
+        self.pmp001_bearing_wear = False
+        self.pmp001_rpm = 750.0
+        self.pmp001_temp = 35.0
+        
+        self.history = []
+        
+        self.logging_active = False
+        self.pmp001_log_line_count = 0
+        self.pmp001_log_size = 0
+        self.pmp002_log_line_count = 0
+        self.pmp002_log_size = 0
+
+sim_state = MockSimulation()
+
+@app.get("/api/simulation/status")
+async def get_sim_status():
+    import time, random
+    # Update some dynamic mock values for realism
+    if not sim_state.interlock_tripped:
+        if sim_state.pmp001_speed > 0:
+            sim_state.tank_level += (sim_state.pmp001_speed/100) * 5.0
+            sim_state.pit001_pressure = 2.0 + (sim_state.pmp001_speed/100) * 1.5 + random.uniform(-0.1, 0.1)
+        if sim_state.pmp002_speed > 0 and sim_state.v001_open and sim_state.tank_level > 0:
+            sim_state.tank_level -= (sim_state.pmp002_speed/100) * 5.0
+            sim_state.fit001_flow = (sim_state.pmp002_speed/100) * 30.0 + random.uniform(-0.5, 0.5)
+        else:
+            sim_state.fit001_flow = 0.0
+
+    sim_state.tank_level = max(0.0, min(sim_state.tank_level, sim_state.tank_max_capacity))
+    sim_state.lit001_pct = (sim_state.tank_level / sim_state.tank_max_capacity) * 100
+    
+    is_lah = sim_state.lit001_pct >= sim_state.lah_limit
+    is_lal = sim_state.lit001_pct <= sim_state.lal_limit
+    is_tah = (sim_state.ambient_temp + (sim_state.pmp001_speed/100)*20 + (10 if getattr(sim_state, "pmp001_bearing_wear", False) else 0)) >= 105 or (sim_state.ambient_temp + (sim_state.pmp002_speed/100)*20 + (10 if getattr(sim_state, "pmp002_bearing_wear", False) else 0)) >= 105
+    is_pah = sim_state.pit001_pressure >= 5.0
+    
+    in_alarm = is_lah or is_lal or is_tah or is_pah
+    
+    if in_alarm and not sim_state.prev_in_alarm:
+        sim_state.interlock_tripped = True
+        if is_lah: sim_state.pmp001_speed = 0.0
+        if is_lal: sim_state.pmp002_speed = 0.0
+        
+    sim_state.prev_in_alarm = in_alarm
+
+    sim_state.history.append({
+        "time": time.strftime("%H:%M:%S"),
+        "tank_level_pct": sim_state.lit001_pct,
+        "pit001_pressure": sim_state.pit001_pressure,
+        "fit001_flow": sim_state.fit001_flow,
+        "pmp001_power": (sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp001_bearing_wear", False) else 1.0),
+        "pmp001_rpm": (sim_state.pmp001_speed/100) * sim_state.pmp_max_rpm,
+        "pmp001_temp": sim_state.ambient_temp + (sim_state.pmp001_speed/100)*20 + (10 if getattr(sim_state, "pmp001_bearing_wear", False) else 0),
+        "pmp001_current": ((sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp001_speed > 0 else 0,
+        "pmp001_press": sim_state.pit001_pressure,
+        "pmp002_power": (sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp002_bearing_wear", False) else 1.0),
+        "pmp002_rpm": (sim_state.pmp002_speed/100) * sim_state.pmp_max_rpm,
+        "pmp002_temp": sim_state.ambient_temp + (sim_state.pmp002_speed/100)*20 + (10 if getattr(sim_state, "pmp002_bearing_wear", False) else 0),
+        "pmp002_current": ((sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp002_speed > 0 else 0,
+        "pmp002_press": 0.0 if not sim_state.v001_open else sim_state.pit001_pressure * 0.5
+    })
+    if len(sim_state.history) > 60:
+        sim_state.history.pop(0)
+
+    import os, csv
+    if sim_state.logging_active:
+        now = time.time()
+        if not hasattr(sim_state, "last_log_time"):
+            sim_state.last_log_time = 0.0
+        if now - sim_state.last_log_time >= 1.0:
+            sim_state.last_log_time = now
+            
+            def write_csv(filename, pmp):
+                file_exists = os.path.exists(filename)
+                with open(filename, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    if not file_exists:
+                        writer.writerow(["Timestamp", "Power_kW", "Voltage_V", "Current_A", "Speed_RPM", "Temperature_C", "Pressure_bar"])
+                    writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), f"{pmp['power_kw']:.1f}", f"{pmp['voltage_v']:.1f}", f"{pmp['current_a']:.3f}", f"{pmp['speed_rpm']:.1f}", f"{pmp['temperature_c']:.1f}", f"{pmp['pressure_bar']:.2f}"])
+                
+                setattr(sim_state, f"{filename.split('_')[0]}_log_line_count", getattr(sim_state, f"{filename.split('_')[0]}_log_line_count") + 1)
+                setattr(sim_state, f"{filename.split('_')[0]}_log_size", os.path.getsize(filename))
+                
+            write_csv("pmp001_pdm_dataset.csv", {
+                "power_kw": (sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp001_bearing_wear", False) else 1.0),
+                "voltage_v": sim_state.pmp_nominal_voltage,
+                "current_a": ((sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp001_speed > 0 else 0,
+                "speed_rpm": (sim_state.pmp001_speed/100) * sim_state.pmp_max_rpm,
+                "temperature_c": sim_state.ambient_temp + (sim_state.pmp001_speed/100)*20 + (10 if getattr(sim_state, "pmp001_bearing_wear", False) else 0),
+                "pressure_bar": sim_state.pit001_pressure
+            })
+            write_csv("pmp002_pdm_dataset.csv", {
+                "power_kw": (sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp002_bearing_wear", False) else 1.0),
+                "voltage_v": sim_state.pmp_nominal_voltage,
+                "current_a": ((sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp002_speed > 0 else 0,
+                "speed_rpm": (sim_state.pmp002_speed/100) * sim_state.pmp_max_rpm,
+                "temperature_c": sim_state.ambient_temp + (sim_state.pmp002_speed/100)*20 + (10 if getattr(sim_state, "pmp002_bearing_wear", False) else 0),
+                "pressure_bar": 0.0 if not sim_state.v001_open else sim_state.pit001_pressure * 0.5
+            })
+
+    active_alarms = []
+    if sim_state.lit001_pct >= sim_state.lah_limit:
+        active_alarms.append("LAH")
+    if sim_state.lit001_pct <= sim_state.lal_limit:
+        active_alarms.append("LAL")
+    if (sim_state.ambient_temp + (sim_state.pmp001_speed/100)*20 + (10 if getattr(sim_state, "pmp001_bearing_wear", False) else 0)) >= 105:
+        active_alarms.append("TAH")
+    if sim_state.pit001_pressure >= 5.0:
+        active_alarms.append("PAH")
+
+    return {
+        "tank_max_capacity": sim_state.tank_max_capacity,
+        "pmp001_max_flow": sim_state.pmp001_max_flow,
+        "pmp002_max_flow": sim_state.pmp002_max_flow,
+        "lah_limit": sim_state.lah_limit,
+        "lal_limit": sim_state.lal_limit,
+        "pmp_nominal_voltage": sim_state.pmp_nominal_voltage,
+        "pmp_nominal_power": sim_state.pmp_nominal_power,
+        "pmp_max_rpm": sim_state.pmp_max_rpm,
+        "ambient_temp": sim_state.ambient_temp,
+        "tank_level": sim_state.tank_level,
+        "pmp001_speed": sim_state.pmp001_speed,
+        "pmp002_speed": sim_state.pmp002_speed,
+        "v001_open": sim_state.v001_open,
+        "interlock_tripped": sim_state.interlock_tripped,
+        "prev_in_alarm": sim_state.prev_in_alarm,
+        "active_alarms": active_alarms,
+        "pit001_pressure": sim_state.pit001_pressure,
+        "lit001_pct": sim_state.lit001_pct,
+        "fit001_flow": sim_state.fit001_flow,
+        "logging_active": sim_state.logging_active,
+        "pmp001_log_line_count": getattr(sim_state, "pmp001_log_line_count", 0),
+        "pmp001_log_size": getattr(sim_state, "pmp001_log_size", 0),
+        "pmp002_log_line_count": getattr(sim_state, "pmp002_log_line_count", 0),
+        "pmp002_log_size": getattr(sim_state, "pmp002_log_size", 0),
+        "pmp001": {
+            "bearing_wear": getattr(sim_state, "pmp001_bearing_wear", False),
+            "speed_rpm": (sim_state.pmp001_speed/100) * sim_state.pmp_max_rpm,
+            "power_kw": (sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp001_bearing_wear", False) else 1.0),
+            "voltage_v": sim_state.pmp_nominal_voltage,
+            "current_a": ((sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp001_speed > 0 else 0,
+            "temperature_c": sim_state.ambient_temp + (sim_state.pmp001_speed/100)*20 + (10 if getattr(sim_state, "pmp001_bearing_wear", False) else 0),
+            "pressure_bar": sim_state.pit001_pressure
+        },
+        "pmp002": {
+            "bearing_wear": getattr(sim_state, "pmp002_bearing_wear", False),
+            "speed_rpm": (sim_state.pmp002_speed/100) * sim_state.pmp_max_rpm,
+            "power_kw": (sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp002_bearing_wear", False) else 1.0),
+            "voltage_v": sim_state.pmp_nominal_voltage,
+            "current_a": ((sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp002_speed > 0 else 0,
+            "temperature_c": sim_state.ambient_temp + (sim_state.pmp002_speed/100)*20 + (10 if getattr(sim_state, "pmp002_bearing_wear", False) else 0),
+            "pressure_bar": 0.0 if not sim_state.v001_open else sim_state.pit001_pressure * 0.5
+        }
+    }
+
+@app.get("/api/simulation/history")
+async def get_sim_history():
+    return sim_state.history
+
+@app.post("/api/simulation/controls")
+async def update_sim_controls(req: Request):
+    data = await req.json()
+    if "pmp001_speed" in data: sim_state.pmp001_speed = float(data["pmp001_speed"])
+    if "pmp002_speed" in data: sim_state.pmp002_speed = float(data["pmp002_speed"])
+    if "v001_open" in data: sim_state.v001_open = bool(data["v001_open"])
+    if "pmp001_bearing_wear" in data: setattr(sim_state, "pmp001_bearing_wear", bool(data["pmp001_bearing_wear"]))
+    if "pmp002_bearing_wear" in data: setattr(sim_state, "pmp002_bearing_wear", bool(data["pmp002_bearing_wear"]))
+    return {"status": await get_sim_status()}
+
+@app.post("/api/simulation/config")
+async def update_sim_config(req: Request):
+    data = await req.json()
+    if "tank_max_capacity" in data: sim_state.tank_max_capacity = float(data["tank_max_capacity"])
+    if "lah_limit" in data: sim_state.lah_limit = float(data["lah_limit"])
+    if "lal_limit" in data: sim_state.lal_limit = float(data["lal_limit"])
+    if "pmp_nominal_voltage" in data: sim_state.pmp_nominal_voltage = float(data["pmp_nominal_voltage"])
+    if "ambient_temp" in data: sim_state.ambient_temp = float(data["ambient_temp"])
+    return {"status": await get_sim_status()}
+
+@app.post("/api/simulation/reset-interlock")
+async def reset_interlock():
+    sim_state.interlock_tripped = False
+    return {"status": await get_sim_status()}
+
+@app.post("/api/simulation/wipe-history")
+async def wipe_history():
+    sim_state.history = []
+    return {"status": await get_sim_status()}
+
+@app.post("/api/simulation/logging/toggle")
+async def toggle_logging():
+    sim_state.logging_active = not sim_state.logging_active
+    return {"status": await get_sim_status()}
+
+@app.delete("/api/simulation/logs")
+async def delete_logs():
+    import os
+    if os.path.exists("pmp001_pdm_dataset.csv"): os.remove("pmp001_pdm_dataset.csv")
+    if os.path.exists("pmp002_pdm_dataset.csv"): os.remove("pmp002_pdm_dataset.csv")
+    sim_state.pmp001_log_line_count = 0
+    sim_state.pmp001_log_size = 0
+    sim_state.pmp002_log_line_count = 0
+    sim_state.pmp002_log_size = 0
+    return {"status": await get_sim_status()}

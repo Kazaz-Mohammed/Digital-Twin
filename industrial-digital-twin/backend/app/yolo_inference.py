@@ -1,8 +1,9 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 import sys
 import json
 from ultralytics import YOLO
 import cv2
-import os
 import numpy as np
 
 # Set required environment variables for the digitization project config
@@ -776,7 +777,8 @@ def run_inference(image_path, model_path):
         }))
         
     except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        import traceback
+        print(json.dumps({"error": traceback.format_exc()}))
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

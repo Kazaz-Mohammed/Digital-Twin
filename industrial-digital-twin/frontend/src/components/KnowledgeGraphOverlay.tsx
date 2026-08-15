@@ -29,118 +29,251 @@ const getNodeColors = (type: string) => {
 };
 
 export default function KnowledgeGraphOverlay() {
-  const { expandedPanel } = useDigitalTwin();
+  const { expandedPanel, graphData, setGraphData } = useDigitalTwin();
   const isExpanded = expandedPanel === "graph";
 
-  const [data, setData] = useState<{ nodes: NodeItem[]; edges: EdgeItem[] } | null>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeItem | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // Zoom & Pan state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+
+  // Calculate dynamic node radius based on count and expansion state
+  const nodeCount = graphData ? graphData.nodes.length : 0;
+  const baseRadius = isExpanded ? 32 : 20;
+  const nodeRadius = nodeCount > 12 
+    ? Math.max(isExpanded ? 12 : 7, baseRadius * Math.sqrt(12 / nodeCount))
+    : baseRadius;
+
   useEffect(() => {
-    fetch("http://localhost:8000/api/graph/topology")
-      .then(res => res.json())
-      .then(topology => {
-        setData(topology);
-        
-        // Group nodes into functional columns to create a clean left-to-right process flow layout
-        const cols: Record<string, string[]> = {
-          sensors: [],
-          valves: [],
-          pumps_etc: [],
-          filters: [],
-          tanks: [],
-          others: []
-        };
+    // Always fetch fresh topology when graphData is null (initial load or after clear)
+    if (!graphData) {
+      fetch("http://localhost:8000/api/graph/topology")
+        .then(res => res.json())
+        .then(topology => {
+          setGraphData(topology);
+        })
+        .catch(err => {
+          console.error("Error loading Neo4j topology graph:", err);
+        });
+      return;
+    }
 
-        topology.nodes.forEach((node: NodeItem) => {
-          const id = node.id.toUpperCase();
-          if (id.startsWith("SNS-") || node.type === "sensor") {
-            cols.sensors.push(node.id);
-          } else if (id.startsWith("VLV-") || node.type === "valve") {
-            cols.valves.push(node.id);
-          } else if (id.startsWith("PMP-") || id.startsWith("HEX-") || id.startsWith("MXR-") || node.type === "pump" || node.type === "mixer" || node.type === "heatexchanger") {
-            cols.pumps_etc.push(node.id);
-          } else if (id.startsWith("FLT-") || node.type === "filter") {
-            cols.filters.push(node.id);
-          } else if (id.startsWith("TNK-") || node.type === "tank") {
-            cols.tanks.push(node.id);
-          } else {
-            cols.others.push(node.id);
+    // Re-run layout whenever graphData changes (e.g. after AI Parser extraction completes)
+    const count = graphData.nodes.length;
+    if (count === 0) return;
+
+    // Use a larger virtual space so nodes can spread out naturally without overlap
+    const virtualW = 1000;
+    const virtualH = 800;
+
+    // Start with a grid layout or simple scattered points in the center area of virtual space
+    const initialPositions: Record<string, { x: number; y: number }> = {};
+    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const spacingX = (virtualW - 120) / cols;
+    const spacingY = (virtualH - 100) / Math.ceil(count / cols);
+
+    graphData.nodes.forEach((node: NodeItem, i: number) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      initialPositions[node.id] = {
+        x: 60 + col * spacingX + (Math.random() - 0.5) * 15,
+        y: 50 + row * spacingY + (Math.random() - 0.5) * 15
+      };
+    });
+
+    // Run synchronous force-directed simulation
+    const nodeIds = graphData.nodes.map((n: NodeItem) => n.id);
+    const iterations = 80;
+    for (let iter = 0; iter < iterations; iter++) {
+      const forces: Record<string, { fx: number; fy: number }> = {};
+      nodeIds.forEach(id => { forces[id] = { fx: 0, fy: 0 }; });
+
+      // 1. Repulsion between nodes
+      for (let i = 0; i < nodeIds.length; i++) {
+        for (let j = i + 1; j < nodeIds.length; j++) {
+          const a = initialPositions[nodeIds[i]];
+          const b = initialPositions[nodeIds[j]];
+          if (!a || !b) continue;
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const minSafeDist = nodeRadius * 3.5; // safe distance in virtual space
+          if (dist < minSafeDist) {
+            const forceMag = 4000 / (dist * dist);
+            const fx = (dx / dist) * forceMag;
+            const fy = (dy / dist) * forceMag;
+            forces[nodeIds[i]].fx -= fx;
+            forces[nodeIds[i]].fy -= fy;
+            forces[nodeIds[j]].fx += fx;
+            forces[nodeIds[j]].fy += fy;
           }
-        });
-
-        const activeCols = [
-          cols.sensors,
-          cols.valves,
-          cols.pumps_etc,
-          cols.filters,
-          cols.tanks,
-          cols.others
-        ].filter(c => c.length > 0);
-
-        const initialPositions: Record<string, { x: number; y: number }> = {};
-        const totalCols = activeCols.length;
-        
-        const width = isExpanded ? 500 : 340; // Adjust graph width when expanded to fit properties panel
-        const height = isExpanded ? 400 : 160;
-
-        activeCols.forEach((colNodes, colIdx) => {
-          // Evenly space columns across layout width
-          const x = 35 + (colIdx * (width - 70)) / Math.max(1, totalCols - 1);
-          const colSize = colNodes.length;
-          
-          colNodes.forEach((nodeId, nodeIdx) => {
-            // Space out items vertically; center columns containing single nodes
-            let y = height / 2;
-            if (colSize > 1) {
-              y = 28 + (nodeIdx * (height - 56)) / (colSize - 1);
-            }
-            initialPositions[nodeId] = { x, y };
-          });
-        });
-        setPositions(initialPositions);
-
-        // Auto select first node on expand
-        if (topology.nodes.length > 0 && !selectedNode) {
-          setSelectedNode(topology.nodes[0]);
         }
-      })
-      .catch(err => {
-        console.error("Error loading Neo4j topology graph:", err);
+      }
+
+      // 2. Attraction along edges
+      graphData.edges.forEach((edge: EdgeItem) => {
+        const a = initialPositions[edge.source];
+        const b = initialPositions[edge.target];
+        if (!a || !b) return;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const targetLen = nodeRadius * 4.5; // line length in virtual space
+        const attract = (dist - targetLen) * 0.05;
+        const fx = (dx / dist) * attract;
+        const fy = (dy / dist) * attract;
+        forces[edge.source].fx += fx;
+        forces[edge.source].fy += fy;
+        forces[edge.target].fx -= fx;
+        forces[edge.target].fy -= fy;
       });
-  }, [isExpanded]);
+
+      // Apply forces and constrain inside virtual canvas
+      const damping = 0.25;
+      const margin = 50;
+      nodeIds.forEach(id => {
+        const pos = initialPositions[id];
+        if (!pos) return;
+        let nx = pos.x + forces[id].fx * damping;
+        let ny = pos.y + forces[id].fy * damping;
+        nx = Math.max(margin, Math.min(virtualW - margin, nx));
+        ny = Math.max(margin, Math.min(virtualH - margin, ny));
+        initialPositions[id] = { x: nx, y: ny };
+      });
+    }
+
+    setPositions(initialPositions);
+
+    // Compute Auto-Fit scale to fit the virtual positions inside the actual box size
+    const width = isExpanded ? 500 : 340;
+    const height = isExpanded ? 400 : 160;
+
+    const xs = Object.values(initialPositions).map(p => p.x);
+    const ys = Object.values(initialPositions).map(p => p.y);
+    if (xs.length > 0) {
+      const minX = Math.min(...xs) - 40;
+      const maxX = Math.max(...xs) + 40;
+      const minY = Math.min(...ys) - 40;
+      const maxY = Math.max(...ys) + 40;
+
+      const scaleX = width / (maxX - minX);
+      const scaleY = height / (maxY - minY);
+      const newZoom = Math.min(scaleX, scaleY, 1.2);
+      
+      setZoom(newZoom);
+      setPan({
+        x: (width - (maxX + minX) * newZoom) / 2,
+        y: (height - (maxY + minY) * newZoom) / 2
+      });
+    }
+
+    // Auto select first node on expand
+    if (graphData.nodes.length > 0 && !selectedNode) {
+      setSelectedNode(graphData.nodes[0]);
+    }
+  }, [graphData, isExpanded]);
+
+  // Poll backend every 5 seconds so the KG dashboard stays in sync with latest AI extraction
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/graph/topology");
+        if (res.ok) {
+          const topology = await res.json();
+          // Only update if node count changed (new extraction happened) to avoid rerender loops
+          const newCount = topology?.nodes?.length ?? 0;
+          const currentCount = graphData?.nodes?.length ?? 0;
+          if (newCount !== currentCount) {
+            setGraphData(topology);
+          }
+        }
+      } catch {
+        // ignore polling errors silently
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [graphData, setGraphData]);
+
+  // Mouse wheel listener for zoom controls
+  useEffect(() => {
+    const container = svgRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = 1.1;
+      let nextZoom = zoom;
+      if (e.deltaY < 0) {
+        nextZoom = Math.min(zoom * factor, 6);
+      } else {
+        nextZoom = Math.max(zoom / factor, 0.1);
+      }
+
+      const rect = container.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      setPan(prev => ({
+        x: mx - (mx - prev.x) * (nextZoom / zoom),
+        y: my - (my - prev.y) * (nextZoom / zoom)
+      }));
+      setZoom(nextZoom);
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [zoom]);
 
   const handleMouseDown = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setDraggingNodeId(nodeId);
     
     // Set selected node on click
-    const node = data?.nodes.find(n => n.id === nodeId);
+    const node = graphData?.nodes.find(n => n.id === nodeId);
     if (node) {
       setSelectedNode(node);
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!draggingNodeId || !svgRef.current) return;
-    
-    const rect = svgRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    setPositions(prev => ({
-      ...prev,
-      [draggingNodeId]: { 
-        x: Math.max(10, Math.min(rect.width - 10, x)), 
-        y: Math.max(10, Math.min(rect.height - 10, y)) 
-      }
-    }));
+  const handleSvgMouseDown = (e: React.MouseEvent) => {
+    if (!draggingNodeId) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    }
   };
 
-  const handleMouseUp = () => {
+  const handleSvgMouseMove = (e: React.MouseEvent) => {
+    if (draggingNodeId && svgRef.current) {
+      const rect = svgRef.current.getBoundingClientRect();
+      // Translate mouse coordinates to virtual space coordinates accounting for zoom and pan
+      const x = (e.clientX - rect.left - pan.x) / zoom;
+      const y = (e.clientY - rect.top - pan.y) / zoom;
+      setPositions(prev => ({
+        ...prev,
+        [draggingNodeId]: { 
+          x: Math.max(20, Math.min(980, x)), 
+          y: Math.max(20, Math.min(780, y)) 
+        }
+      }));
+      return;
+    }
+    if (isPanning) {
+      setPan({
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y
+      });
+    }
+  };
+
+  const handleSvgMouseUp = () => {
     setDraggingNodeId(null);
+    setIsPanning(false);
   };
 
   // Helper to draw curved paths with arrow marker boundary offsets
@@ -156,12 +289,11 @@ export default function KnowledgeGraphOverlay() {
 
     if (dist === 0) return null;
 
-    // Radius of circular node is 20 (or 32 if expanded). Terminate lines exactly at circle boundaries.
-    const nodeRadius = isExpanded ? 32 : 20;
+    // Radius matches dynamic scaled nodeRadius
     const padX1 = (dx / dist) * nodeRadius; 
     const padY1 = (dy / dist) * nodeRadius;
-    const padX2 = (dx / dist) * (nodeRadius + 5); // Terminate 5px earlier for arrow head clearance
-    const padY2 = (dy / dist) * (nodeRadius + 5);
+    const padX2 = (dx / dist) * (nodeRadius + 4); // Terminate 4px earlier for arrow head clearance
+    const padY2 = (dy / dist) * (nodeRadius + 4);
 
     const x1 = srcPos.x + padX1;
     const y1 = srcPos.y + padY1;
@@ -182,18 +314,20 @@ export default function KnowledgeGraphOverlay() {
           strokeWidth={isExpanded ? "1.8" : "1.2"}
           markerEnd="url(#arrow)"
         />
-        <text
-          x={cx}
-          y={cy - (isExpanded ? 8 : 4)}
-          fill="var(--text-muted)"
-          fontSize={isExpanded ? "8" : "6"}
-          fontWeight="bold"
-          textAnchor="middle"
-          fontFamily="var(--font-mono)"
-          className="select-none"
-        >
-          {edge.label.toUpperCase()}
-        </text>
+        {nodeRadius > 10 && (
+          <text
+            x={cx}
+            y={cy - (isExpanded ? 8 : 4)}
+            fill="var(--text-muted)"
+            fontSize={isExpanded ? "8" : "6"}
+            fontWeight="bold"
+            textAnchor="middle"
+            fontFamily="var(--font-mono)"
+            className="select-none"
+          >
+            {edge.label.toUpperCase()}
+          </text>
+        )}
       </g>
     );
   };
@@ -208,16 +342,16 @@ export default function KnowledgeGraphOverlay() {
       <div className={`flex-1 flex ${isExpanded ? "flex-row min-h-0" : "flex-col"} relative select-none`}>
         {/* Graph SVG canvas view */}
         <div className="flex-1 relative bg-black/5 rounded overflow-hidden">
-          {data ? (
+          {graphData ? (
             <svg 
               ref={svgRef}
               width="100%" 
               height="100%" 
-              viewBox={isExpanded ? "0 0 500 400" : "0 0 340 160"}
               className="w-full h-full cursor-grab active:cursor-grabbing"
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
+              onMouseDown={handleSvgMouseDown}
+              onMouseMove={handleSvgMouseMove}
+              onMouseUp={handleSvgMouseUp}
+              onMouseLeave={handleSvgMouseUp}
             >
               {/* SVG Markers definitions for arrows */}
               <defs>
@@ -234,58 +368,61 @@ export default function KnowledgeGraphOverlay() {
                 </marker>
               </defs>
 
-              {/* Draw Relationships Edges */}
-              {data.edges.map((edge, idx) => renderEdge(edge, idx))}
+              <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+                {/* Draw Relationships Edges */}
+                {graphData.edges.map((edge, idx) => renderEdge(edge, idx))}
 
-              {/* Draw Nodes (Circular Neo4j layout style) */}
-              {data.nodes.map((node) => {
-                const pos = positions[node.id];
-                if (!pos) return null;
+                {/* Draw Nodes (Circular Neo4j layout style) */}
+                {graphData.nodes.map((node) => {
+                  const pos = positions[node.id];
+                  if (!pos) return null;
 
-                // Dynamic coloring mapping matching Neo4j styles
-                const colors = getNodeColors(node.type);
+                  // Dynamic coloring mapping matching Neo4j styles
+                  const colors = getNodeColors(node.type);
 
-                // Split label text to display short tags inside circles neatly
-                const cleanLabel = node.label.replace(/[\[\]]/g, "");
-                const nodeRadius = isExpanded ? 32 : 20;
-                const isSelected = selectedNode?.id === node.id;
+                  // Split label text to display short tags inside circles neatly
+                  const cleanLabel = node.label.replace(/[\[\]]/g, "");
+                  const isSelected = selectedNode?.id === node.id;
 
-                return (
-                  <g 
-                    key={node.id} 
-                    transform={`translate(${pos.x}, ${pos.y})`}
-                    className="cursor-pointer group"
-                    onMouseDown={(e) => handleMouseDown(node.id, e)}
-                  >
-                    {/* Outer circle representing Neo4j nodes */}
-                    <circle 
-                      cx="0"
-                      cy="0"
-                      r={nodeRadius}
-                      fill={colors.bg}
-                      stroke={isSelected ? "#ffffff" : colors.border}
-                      strokeWidth={isSelected ? "2.5" : isExpanded ? "2" : "1.5"}
-                      className="shadow-md group-hover:brightness-110 transition-all duration-150"
-                    />
-                    <text 
-                      x="0" 
-                      y={isExpanded ? "3" : "2"} 
-                      fill="#ffffff" 
-                      fontSize={isExpanded ? "9" : "6"} 
-                      fontWeight="bold"
-                      textAnchor="middle" 
-                      fontFamily="var(--font-sans)"
-                      className="select-none pointer-events-none"
+                  return (
+                    <g 
+                      key={node.id} 
+                      transform={`translate(${pos.x}, ${pos.y})`}
+                      className="cursor-pointer group"
+                      onMouseDown={(e) => handleMouseDown(node.id, e)}
                     >
-                      {isExpanded 
-                        ? (cleanLabel.length > 15 ? cleanLabel.substring(0, 12) + "..." : cleanLabel)
-                        : (cleanLabel.length > 9 ? cleanLabel.substring(0, 7) + "..." : cleanLabel)
-                      }
-                    </text>
-                    <title>{cleanLabel}</title>
-                  </g>
-                );
-              })}
+                      {/* Outer circle representing Neo4j nodes */}
+                      <circle 
+                        cx="0"
+                        cy="0"
+                        r={nodeRadius}
+                        fill={colors.bg}
+                        stroke={isSelected ? "#ffffff" : colors.border}
+                        strokeWidth={isSelected ? "2.5" : isExpanded ? "2" : "1.5"}
+                        className="shadow-md group-hover:brightness-110 transition-all duration-150"
+                      />
+                      {nodeRadius > 10 && (
+                        <text 
+                          x="0" 
+                          y={isExpanded ? "3" : "2"} 
+                          fill="#ffffff" 
+                          fontSize={nodeRadius > 15 ? (isExpanded ? "9" : "6") : "4.5"} 
+                          fontWeight="bold"
+                          textAnchor="middle" 
+                          fontFamily="var(--font-sans)"
+                          className="select-none pointer-events-none"
+                        >
+                          {isExpanded 
+                            ? (cleanLabel.length > 15 ? cleanLabel.substring(0, 12) + "..." : cleanLabel)
+                            : (cleanLabel.length > 9 ? cleanLabel.substring(0, 7) + "..." : cleanLabel)
+                          }
+                        </text>
+                      )}
+                      <title>{cleanLabel}</title>
+                    </g>
+                  );
+                })}
+              </g>
             </svg>
           ) : (
             <p className="text-xs theme-text-muted flex items-center justify-center h-full">Loading Neo4j Nodes...</p>

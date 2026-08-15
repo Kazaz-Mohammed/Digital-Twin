@@ -21,7 +21,8 @@ export default function WastewaterPlant() {
     fbx.position.z = -center.z;
     fbx.position.y = -box.min.y;
     
-    console.log('Model Size after Rotation:', size);
+    console.log('Model Size components:', size.x, size.y, size.z);
+    console.log('Model Box Min/Max:', box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z);
     console.log('Model Rotated and Aligned to Y=0');
 
     fbx.traverse((child) => {

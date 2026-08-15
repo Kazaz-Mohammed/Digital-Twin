@@ -251,6 +251,7 @@ export default function AasAssetTree() {
   const { selectedAsset, setSelectedAsset, expandedPanel } = useDigitalTwin();
   const isExpanded = expandedPanel === "aas";
 
+  const [hierarchy, setHierarchy] = useState<BaSyxNode>(FALLBACK_HIERARCHY);
   const [shells, setShells] = useState<BaSyxShell[]>([]);
   const [selectedShell, setSelectedShell] = useState<BaSyxShell | null>(null);
   const [submodels, setSubmodels] = useState<BaSyxSubmodel[]>([]);
@@ -260,18 +261,39 @@ export default function AasAssetTree() {
   const [submodelSearch, setSubmodelSearch] = useState("");
   const [rightTab, setRightTab] = useState<"details" | "json">("details");
 
-  // Fetch Shells on mount
+  // Fetch Shells and Hierarchy on mount with polling
   useEffect(() => {
-    fetch("http://localhost:8000/api/aas/shells")
-      .then(res => res.json())
-      .then(data => {
-        setShells(data);
-        if (data.length > 0) {
-          setSelectedShell(data[0]);
-        }
-      })
-      .catch(err => console.error("Error loading AAS Shells:", err));
-  }, []);
+    const fetchShells = () => {
+      fetch("http://localhost:8000/api/aas/shells")
+        .then(res => res.json())
+        .then(data => {
+          setShells(data);
+          if (data.length > 0 && !selectedShell) {
+            setSelectedShell(data[0]);
+          }
+        })
+        .catch(err => console.error("Error loading AAS Shells:", err));
+    };
+
+    const fetchHierarchy = () => {
+      fetch("http://localhost:8000/api/aas/hierarchy")
+        .then(res => res.json())
+        .then(data => {
+          setHierarchy(data);
+        })
+        .catch(err => console.error("Error loading AAS Hierarchy:", err));
+    };
+
+    fetchShells();
+    fetchHierarchy();
+
+    const interval = setInterval(() => {
+      fetchShells();
+      fetchHierarchy();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [selectedShell]);
 
   // Fetch Submodels whenever selected shell changes
   useEffect(() => {
@@ -307,7 +329,7 @@ export default function AasAssetTree() {
         {/* High-Fidelity Tree view replica of Eclipse BaSyx UI */}
         <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 py-1">
           <BaSyxHierarchyItem
-            node={FALLBACK_HIERARCHY}
+            node={hierarchy}
             depth={0}
             selectedShell={selectedShell}
             setSelectedShell={setSelectedShell}

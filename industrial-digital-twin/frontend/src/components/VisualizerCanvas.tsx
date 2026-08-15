@@ -5,6 +5,7 @@ import { useDigitalTwin, AAS_PLANT_NODES } from "../context/DigitalTwinContext";
 import ThreeCanvas from "./ThreeCanvas";
 import ExtractionWorkspace from "./ExtractionWorkspace";
 import KnowledgeGraphOverlay from "./KnowledgeGraphOverlay";
+import SimulationWorkspace from "./SimulationWorkspace";
 
 const IconFullscreen = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -15,17 +16,29 @@ const IconFullscreen = () => (
 export default function VisualizerCanvas() {
   const { selectedAsset, setSelectedAsset, activeTab, setActiveTab, expandedPanel, setExpandedPanel, telemetry } = useDigitalTwin();
 
+  const [activePopup, setActivePopup] = React.useState<string | null>(null);
+
+  const togglePopup = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActivePopup(activePopup === id ? null : id);
+  };
+
   // Map simulated values to HMI scenario variables
   const tankLevel = Math.round(telemetry.temp);
   const pressureValue = (telemetry.press * 10).toFixed(0);
   const flowValue = (telemetry.flow / 10).toFixed(0);
 
+  // Close popup if clicking on the background
+  const handleSvgClick = () => {
+    if (activePopup) setActivePopup(null);
+  };
+
   return (
-    <div className="w-full h-full relative overflow-hidden flex flex-col justify-center items-center bg-black/40">
+    <div className="w-full h-full relative overflow-hidden bg-black/40">
       
       {/* Floating HUD View Selector (Top Left) */}
       <div className="absolute top-3 left-3 z-30 flex bg-[var(--bg-panel)]/95 p-0.5 border border-[var(--border-panel)] rounded shadow-lg">
-        {(["3d", "2d", "extraction"] as const).map((tab) => (
+        {(["3d", "2d", "simulation", "extraction"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -33,7 +46,7 @@ export default function VisualizerCanvas() {
               activeTab === tab ? "bg-cyan-500 text-white" : "text-[var(--text-muted)] hover:text-[var(--text-main)]"
             }`}
           >
-            {tab === "3d" ? "3D CAD" : tab === "2d" ? "2D P&ID" : "AI Parser"}
+            {tab === "3d" ? "3D CAD" : tab === "2d" ? "2D P&ID" : tab === "simulation" ? "Simulation" : "AI Parser"}
           </button>
         ))}
       </div>
@@ -61,7 +74,7 @@ export default function VisualizerCanvas() {
       {/* 2D P&ID SVG View Render */}
       {activeTab === "2d" && (
         <div className="w-full h-full relative bg-[#d8dbdf] flex items-center justify-center p-2">
-          <svg viewBox="0 0 960 320" className="w-full h-full max-h-full select-none" preserveAspectRatio="xMidYMid meet">
+          <svg viewBox="0 0 960 320" className="w-full h-full max-h-full select-none" preserveAspectRatio="xMidYMid meet" onClick={handleSvgClick}>
             {/* Screen Background (Neutral HMI gray) */}
             <rect width="100%" height="100%" fill="#d8dbdf" />
             
@@ -73,156 +86,251 @@ export default function VisualizerCanvas() {
             </defs>
             <rect width="100%" height="100%" fill="url(#grid)" />
 
-            {/* PIPES (ISA standard process lines - thick gray) */}
-            <line x1="80" y1="180" x2="182" y2="180" stroke="#7e8a97" strokeWidth="4" />
-            <line x1="220" y1="167" x2="430" y2="167" stroke="#7e8a97" strokeWidth="4" />
-            <line x1="320" y1="167" x2="320" y2="140" stroke="#7e8a97" strokeWidth="2.5" />
+            {/* PIPES (ISA standard process lines - dynamically colored based on status) */}
+            {/* Source to PMP-001 (Running -> Green) */}
+            <line x1="80" y1="180" x2="182" y2="180" stroke="#10b981" strokeWidth="4" />
+            {/* PMP-001 to Tank (Running -> Green) */}
+            <line x1="220" y1="167" x2="430" y2="167" stroke="#10b981" strokeWidth="4" />
+            {/* PIT-001 branch line (Running -> Green) */}
+            <line x1="320" y1="167" x2="320" y2="140" stroke="#10b981" strokeWidth="2.5" />
 
-            {/* Outlet line exits side of tank */}
-            <path d="M 510 200 L 540 200 L 540 220 L 600 220" fill="none" stroke="#7e8a97" strokeWidth="4" />
-            <line x1="630" y1="220" x2="682" y2="220" stroke="#7e8a97" strokeWidth="4" />
+            {/* Tank to V-001 (Running/Open -> Green) */}
+            <path d="M 510 200 L 540 200 L 540 220 L 600 220" fill="none" stroke="#10b981" strokeWidth="4" />
+            {/* V-001 to PMP-002 (Running/Open -> Green) */}
+            <line x1="630" y1="220" x2="682" y2="220" stroke="#10b981" strokeWidth="4" />
+
+            {/* PMP-002 to FIT-001 (Stopped/Idle -> Light Gray) */}
             <line x1="720" y1="207" x2="850" y2="207" stroke="#7e8a97" strokeWidth="4" />
-            <line x1="790" y1="207" x2="790" y2="180" stroke="#7e8a97" strokeWidth="2.5" />
+            {/* FIT-001 branch line (Stopped/Idle -> Light Gray) */}
+            <line x1="790" y1="207" x2="790" y2="138" stroke="#7e8a97" strokeWidth="2.5" />
 
-            {/* Instrument connection lines */}
-            <line x1="470" y1="100" x2="470" y2="70" stroke="#7e8a97" strokeWidth="1.5" />
-            <line x1="470" y1="70" x2="550" y2="70" stroke="#7e8a97" strokeWidth="1.5" />
-            <line x1="510" y1="70" x2="510" y2="66" stroke="#7e8a97" strokeWidth="1.5" />
-            <line x1="550" y1="70" x2="550" y2="66" stroke="#7e8a97" strokeWidth="1.5" />
+            {/* Instrument connection lines for LIT, LAH, LAL (Vertical Stack) */}
+            <line x1="510" y1="144" x2="525" y2="144" stroke="#7e8a97" strokeWidth="1.5" />
+            <line x1="540" y1="52" x2="540" y2="159" stroke="#7e8a97" strokeWidth="1.5" />
 
             {/* 1. FROM SOURCE BOX */}
             <rect x="80" y="160" width="80" height="40" fill="#a1a1aa" stroke="#000000" strokeWidth="1.5" />
             <text x="120" y="184" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">FROM SOURCE</text>
 
-            {/* 2. PMP-001 (CENTRIFUGAL PUMP) */}
-            <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[0])} className="cursor-pointer group">
-              {/* Pump Stand Base */}
-              <path d="M 191 195 L 209 195 L 216 204 L 184 204 Z" fill="#ffffff" stroke={selectedAsset.tag === "PMP-001" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "PMP-001" ? "2" : "1.5"} />
-              {/* Pump Tangential Nozzle */}
-              <path d="M 200 162 L 220 162 L 220 172 L 198 172 Z" fill="#ffffff" stroke={selectedAsset.tag === "PMP-001" ? "#0284c7" : "#000000"} strokeWidth="1.5" />
-              {/* Casing Circle */}
-              <circle cx="200" cy="180" r="18" fill="#ffffff" stroke={selectedAsset.tag === "PMP-001" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "PMP-001" ? "3" : "2"} />
-              <text x="200" y="222" fill="#000000" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">PMP-001</text>
-              
-              {/* Status Box */}
+            {/* 2. PMP-001 (CENTRIFUGAL PUMP - RUNNING) */}
+            <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[0]); togglePopup("PMP-001", e); }} className="cursor-pointer group">
+              {/* Status Box (Above Asset) */}
               <rect x="145" y="113" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
-              <text x="200" y="129" fill="#000000" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATUS: RUNNING</text>
+              <text x="200" y="129" fill="#10b981" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATUS: RUNNING</text>
+
+              {/* Pump Stand Base */}
+              <path d="M 191 195 L 209 195 L 216 204 L 184 204 Z" fill="#10b981" stroke="#047857" strokeWidth="2" />
+              {/* Pump Tangential Nozzle */}
+              <path d="M 200 162 L 220 162 L 220 172 L 198 172 Z" fill="#10b981" stroke="#047857" strokeWidth="1.5" />
+              {/* Casing Circle */}
+              <circle cx="200" cy="180" r="18" fill="#10b981" stroke="#047857" strokeWidth="3" />
+              <text x="200" y="222" fill="#000000" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">PMP-001</text>
+
+              {/* Pump Parameters Specifications Box */}
+              <rect x="150" y="235" width="100" height="40" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" rx="2" />
+              <text x="155" y="247" fill="#475569" fontSize="8" fontWeight="bold" fontFamily="monospace">Mfr: KSB</text>
+              <text x="155" y="259" fill="#475569" fontSize="8" fontWeight="bold" fontFamily="monospace">Max Temp: 85°C</text>
+              <text x="155" y="271" fill="#475569" fontSize="8" fontWeight="bold" fontFamily="monospace">Max Pres: 16 bar</text>
+
             </g>
 
             {/* 3. PIT-001 (PRESSURE TRANSMITTER BUBBLE) */}
-            <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[1])} className="cursor-pointer group">
+            <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[1]); togglePopup("PIT-001", e); }} className="cursor-pointer group">
+              {/* Status / Value Box (Above Asset) */}
+              <rect x="270" y="66" width="100" height="24" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
+              <text x="320" y="82" fill="#2563eb" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`PIT-001: ${telemetry.press.toFixed(2)} Bar`}</text>
+
+              {/* Bubble */}
               <circle cx="320" cy="120" r="18" fill="#ffffff" stroke={selectedAsset.tag === "PIT-001" ? "#0284c7" : "#000000"} strokeWidth="1.5" />
               <line x1="302" y1="120" x2="338" y2="120" stroke="#000000" strokeWidth="1.5" />
               <text x="320" y="113" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">PIT</text>
               <text x="320" y="131" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
-              
-              {/* ISA Standard Low-Contrast Value Box */}
-              <rect x="270" y="66" width="100" height="24" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
-              <text x="320" y="82" fill="#0f172a" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`PIT-001: ${pressureValue} psi`}</text>
+
             </g>
 
-            {/* 4. TK-001 (PROCESS TANK) */}
-            <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[2])} className="cursor-pointer group">
-              {/* Tank Cylinder body with rounded dome */}
-              <path d="M 430 260 L 430 130 A 40 40 0 0 1 510 130 L 510 260 Z" fill="#e2e8f0" stroke={selectedAsset.tag === "TK-001" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "TK-001" ? "3" : "2"} />
+            {/* 4. TK-001 (PROCESS TANK - RECTANGULAR) */}
+            <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[2]); togglePopup("TK-001", e); }} className="cursor-pointer group">
+              {/* Status / Value Box (Above Asset) */}
+              <rect x="422" y="70" width="96" height="24" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
+              <text x="470" y="86" fill="#0f172a" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`LEVEL: ${tankLevel} %`}</text>
+
+              {/* Rectangular Tank Cylinder Body */}
+              <rect x="430" y="110" width="80" height="150" fill="#e2e8f0" stroke={selectedAsset.tag === "TK-001" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "TK-001" ? "3" : "2"} rx="4" />
               
               {/* Level indicator container */}
-              <rect x="460" y="140" width="20" height="100" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
+              <rect x="445" y="130" width="16" height="110" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
               {/* Dynamic Liquid fill */}
-              <rect x="461.5" y={240 - tankLevel} width="17" height={tankLevel} fill="#2563eb" />
+              <rect x="446.5" y={240 - (tankLevel * 1.1)} width="13" height={tankLevel * 1.1} fill="#2563eb" />
               
-              <text x="495" y="152" fill="#000000" fontSize="7" fontFamily="sans-serif">LAH</text>
-              <text x="495" y="232" fill="#000000" fontSize="7" fontFamily="sans-serif">LAL</text>
-              <text x="470" y="280" fill="#000000" fontSize="12" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">TK-001</text>
-              
-              {/* ISA Standard Low-Contrast Level box reader */}
-              <rect x="525" y="125" width="95" height="30" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
-              <text x="532" y="137" fill="#0f172a" fontSize="9" fontWeight="bold" fontFamily="sans-serif">TK-001</text>
-              <text x="532" y="149" fill="#0f172a" fontSize="10" fontWeight="bold" fontFamily="sans-serif">{`LEVEL: ${tankLevel} %`}</text>
+              {/* Graduation Ticks (0, 20, 40, 60, 80, 100) */}
+              {[0, 20, 40, 60, 80, 100].map((val) => {
+                const tickY = 240 - val * 1.1;
+                return (
+                  <g key={`tick-${val}`}>
+                    <line x1="461" y1={tickY} x2="467" y2={tickY} stroke="#000000" strokeWidth="1" />
+                    <text x="470" y={tickY + 2.5} fontSize="6" fill="#475569" fontFamily="sans-serif">{val}</text>
+                  </g>
+                );
+              })}
 
+              <text x="470" y="278" fill="#000000" fontSize="12" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">TK-001</text>
+              
+              {/* Popup removed - moved to corner */}
+              
               {/* Alarm indicators only show dynamically during abnormal telemetry limits */}
               {/* Priority 2: Low Alarm (Yellow Triangle) */}
               {tankLevel < 20 && (
                 <g>
-                  <path d="M 611 113 L 619 125 L 603 125 Z" fill="#facc15" stroke="#000000" strokeWidth="1" />
-                  <text x="611" y="123" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">2</text>
+                  <path d="M 405 170 L 413 182 L 397 182 Z" fill="#facc15" stroke="#000000" strokeWidth="1" />
+                  <text x="405" y="180" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">2</text>
                 </g>
               )}
               {/* Priority 1: High Alarm (Red Square) */}
               {tankLevel > 80 && (
                 <g>
-                  <rect x="605" y="130" width="12" height="12" fill="#ef4444" stroke="#000000" strokeWidth="1" rx="1" />
-                  <text x="611" y="139" fill="#ffffff" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">1</text>
+                  <rect x="399" y="190" width="12" height="12" fill="#ef4444" stroke="#000000" strokeWidth="1" rx="1" />
+                  <text x="405" y="199" fill="#ffffff" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">1</text>
                 </g>
               )}
 
-              {/* Stacked Instrument bubbles */}
-              {/* LIT-001 */}
-              <circle cx="470" cy="50" r="18" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
-              <line x1="452" y1="50" x2="488" y2="50" stroke="#000000" strokeWidth="1.5" />
-              <text x="470" y="43" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">LIT</text>
-              <text x="470" y="61" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+              {/* Vertical Stack Instrument Bubbles */}
+              {/* LIT-001 Value Box (Above LIT) */}
+              <rect x="495" y="15" width="90" height="20" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
+              <text x="540" y="29" fill="#2563eb" fontSize="9" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`LIT-001: ${tankLevel} %`}</text>
 
-              {/* LAH-001 */}
-              <circle cx="510" cy="50" r="18" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
-              <line x1="492" y1="50" x2="528" y2="50" stroke="#000000" strokeWidth="1.5" />
-              <text x="510" y="43" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">LAH</text>
-              <text x="510" y="61" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+              {/* LIT-001 Bubble */}
+              <g onClick={(e) => { e.stopPropagation(); setSelectedAsset(AAS_PLANT_NODES[2]); togglePopup("LIT-001", e); }} className="cursor-pointer">
+                <circle cx="540" cy="52" r="15" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
+                <line x1="525" y1="52" x2="555" y2="52" stroke="#000000" strokeWidth="1.5" />
+                <text x="540" y="46" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">LIT</text>
+                <text x="540" y="61" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+                
+              </g>
 
-              {/* LAL-001 */}
-              <circle cx="550" cy="50" r="18" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
-              <line x1="532" y1="50" x2="568" y2="50" stroke="#000000" strokeWidth="1.5" />
-              <text x="550" y="43" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">LAL</text>
-              <text x="550" y="61" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+              {/* LAH-001 Bubble */}
+              <g>
+                <circle cx="540" cy="98" r="15" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
+                <line x1="525" y1="98" x2="555" y2="98" stroke="#000000" strokeWidth="1.5" />
+                <text x="540" y="92" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">LAH</text>
+                <text x="540" y="107" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+              </g>
+
+              {/* LAL-001 Bubble */}
+              <g>
+                <circle cx="540" cy="144" r="15" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
+                <line x1="525" y1="144" x2="555" y2="144" stroke="#000000" strokeWidth="1.5" />
+                <text x="540" y="138" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">LAL</text>
+                <text x="540" y="153" fill="#000000" fontSize="7" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+              </g>
             </g>
 
-            {/* 5. V-001 (CONTROL VALVE) */}
+            {/* 5. V-001 (CONTROL VALVE - ACTIVE/OPEN) */}
             <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[3])} className="cursor-pointer group">
+              {/* Valve Status display box (Above Asset) */}
+              <rect x="560" y="153" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
+              <text x="615" y="169" fill="#10b981" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATE: OPEN</text>
+
               {/* Bowtie valve symbol */}
-              <path d="M 600 210 L 630 230 L 630 210 L 600 230 Z" fill="#ffffff" stroke={selectedAsset.tag === "V-001" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "V-001" ? "2.5" : "1.5"} />
+              <path d="M 600 210 L 630 230 L 630 210 L 600 230 Z" fill="#10b981" stroke="#047857" strokeWidth="2.5" />
               {/* Actuator diaphragm dome */}
               <line x1="615" y1="220" x2="615" y2="200" stroke="#000000" strokeWidth="2" />
               <rect x="605" y="195" width="20" height="6" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
               <text x="615" y="250" fill="#000000" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">V-001</text>
-              
-              {/* Valve status display box */}
-              <rect x="560" y="253" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
-              <text x="615" y="269" fill="#000000" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATE: OPEN</text>
             </g>
 
-            {/* 6. PMP-002 (DISCHARGE PUMP) */}
-            <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[4])} className="cursor-pointer group">
+            {/* 6. PMP-002 (DISCHARGE PUMP - IDLE/STOPPED) */}
+            <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[4]); togglePopup("PMP-002", e); }} className="cursor-pointer group">
+              {/* Status Box (Above Asset) */}
+              <rect x="645" y="113" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
+              <text x="700" y="129" fill="#64748b" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATUS: IDLE</text>
+
               {/* Pump Stand Base */}
-              <path d="M 691 235 L 709 235 L 716 244 L 684 244 Z" fill="#555555" stroke={selectedAsset.tag === "PMP-002" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "PMP-002" ? "2" : "1.5"} />
+              <path d="M 691 235 L 709 235 L 716 244 L 684 244 Z" fill="#cbd5e1" stroke="#64748b" strokeWidth="1.5" />
               {/* Pump Tangential Nozzle */}
-              <path d="M 700 202 L 720 202 L 720 212 L 698 212 Z" fill="#555555" stroke={selectedAsset.tag === "PMP-002" ? "#0284c7" : "#000000"} strokeWidth="1.5" />
+              <path d="M 700 202 L 720 202 L 720 212 L 698 212 Z" fill="#cbd5e1" stroke="#64748b" strokeWidth="1.5" />
               {/* Casing Circle */}
-              <circle cx="700" cy="220" r="18" fill="#555555" stroke={selectedAsset.tag === "PMP-002" ? "#0284c7" : "#000000"} strokeWidth={selectedAsset.tag === "PMP-002" ? "3" : "2"} />
+              <circle cx="700" cy="220" r="18" fill="#cbd5e1" stroke="#64748b" strokeWidth="2" />
               <text x="700" y="262" fill="#000000" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">PMP-002</text>
-              
-              {/* Status Box */}
-              <rect x="645" y="153" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
-              <text x="700" y="169" fill="#000000" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATUS: IDLE</text>
+
+              {/* Pump Parameters Specifications Box */}
+              <rect x="650" y="272" width="100" height="40" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" rx="2" />
+              <text x="655" y="284" fill="#475569" fontSize="8" fontWeight="bold" fontFamily="monospace">Mfr: Grundfos</text>
+              <text x="655" y="296" fill="#475569" fontSize="8" fontWeight="bold" fontFamily="monospace">Max Temp: 75°C</text>
+              <text x="655" y="308" fill="#475569" fontSize="8" fontWeight="bold" fontFamily="monospace">Max Pres: 10 bar</text>
+
             </g>
 
             {/* 7. FIT-001 (FLOW TRANSMITTER BUBBLE) */}
-            <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[5])} className="cursor-pointer group">
-              <circle cx="790" cy="160" r="18" fill="#ffffff" stroke={selectedAsset.tag === "FIT-001" ? "#0284c7" : "#000000"} strokeWidth="1.5" />
-              <line x1="772" y1="160" x2="808" y2="160" stroke="#000000" strokeWidth="1.5" />
-              <text x="790" y="153" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">FIT</text>
-              <text x="790" y="171" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
-              
-              <rect x="740" y="106" width="100" height="24" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
-              <text x="790" y="122" fill="#0f172a" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`FIT-001: ${flowValue} gpm`}</text>
+            <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[5]); togglePopup("FIT-001", e); }} className="cursor-pointer group">
+              {/* Status / Value Box (Above Asset) */}
+              <rect x="740" y="66" width="100" height="24" fill="#e2e8f0" stroke="#a1a1aa" strokeWidth="1" rx="2" />
+              <text x="790" y="82" fill="#2563eb" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`FIT-001: ${(telemetry.flow / 10).toFixed(1)} L/s`}</text>
+
+              {/* Bubble */}
+              <circle cx="790" cy="120" r="18" fill="#ffffff" stroke={selectedAsset.tag === "FIT-001" ? "#0284c7" : "#000000"} strokeWidth="1.5" />
+              <line x1="772" y1="120" x2="808" y2="120" stroke="#000000" strokeWidth="1.5" />
+              <text x="790" y="113" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">FIT</text>
+              <text x="790" y="131" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">001</text>
+
             </g>
 
             {/* 8. TO TARGET BOX */}
-            <rect x="850" y="200" width="80" height="40" fill="#a1a1aa" stroke="#000000" strokeWidth="1.5" />
-            <text x="890" y="224" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">TO TARGET</text>
+            <rect x="850" y="187" width="80" height="40" fill="#a1a1aa" stroke="#000000" strokeWidth="1.5" />
+            <text x="890" y="211" fill="#000000" fontSize="8" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">TO TARGET</text>
+
+            {/* Fixed Left Corner Popup Area */}
+            {activePopup && (
+              <foreignObject x="15" y="15" width="160" height="100">
+                <div className="bg-white border border-gray-400 rounded-sm p-2 text-[10px] shadow-md text-gray-800 pointer-events-none">
+                  {activePopup === "PMP-001" && (
+                    <>
+                      <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">PMP-001 Live Stats</div>
+                      <div className="flex justify-between"><span>Speed:</span><span className="font-mono font-bold text-green-600">1450 RPM</span></div>
+                      <div className="flex justify-between"><span>Temp:</span><span className="font-mono font-bold text-blue-600">{telemetry.temp.toFixed(1)} °C</span></div>
+                      <div className="flex justify-between"><span>Power:</span><span className="font-mono font-bold text-amber-600">2.1 kW</span></div>
+                    </>
+                  )}
+                  {activePopup === "PIT-001" && (
+                    <>
+                      <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">PIT-001 Output</div>
+                      <div className="flex justify-between"><span>Press:</span><span className="font-mono font-bold text-blue-600">{telemetry.press.toFixed(2)} Bar</span></div>
+                    </>
+                  )}
+                  {activePopup === "TK-001" && (
+                    <>
+                      <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">TK-001 Live Stats</div>
+                      <div className="flex justify-between"><span>Level:</span><span className="font-mono font-bold text-green-600">{tankLevel}%</span></div>
+                      <div className="flex justify-between"><span>Temp:</span><span className="font-mono font-bold text-red-600">{telemetry.temp.toFixed(1)} °C</span></div>
+                    </>
+                  )}
+                  {activePopup === "LIT-001" && (
+                    <>
+                      <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">LIT-001 Output</div>
+                      <div className="flex justify-between"><span>Level:</span><span className="font-mono font-bold text-green-600">{tankLevel} %</span></div>
+                    </>
+                  )}
+                  {activePopup === "PMP-002" && (
+                    <>
+                      <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">PMP-002 Live Stats</div>
+                      <div className="flex justify-between"><span>Speed:</span><span className="font-mono font-bold text-gray-500">0 RPM</span></div>
+                      <div className="flex justify-between"><span>Status:</span><span className="font-mono font-bold text-red-600">IDLE</span></div>
+                      <div className="flex justify-between"><span>Flow:</span><span className="font-mono font-bold text-blue-600">0.0 L/s</span></div>
+                    </>
+                  )}
+                  {activePopup === "FIT-001" && (
+                    <>
+                      <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">FIT-001 Output</div>
+                      <div className="flex justify-between"><span>Flow:</span><span className="font-mono font-bold text-blue-600">{(telemetry.flow / 10).toFixed(1)} L/s</span></div>
+                    </>
+                  )}
+                </div>
+              </foreignObject>
+            )}
 
           </svg>
         </div>
       )}
+
 
       {/* Semantic Knowledge Graph View Render */}
       {activeTab === "graph" && (
@@ -266,12 +374,17 @@ export default function VisualizerCanvas() {
         </div>
       )}
 
-      {/* AI Extraction & Correction Workspace Render */}
-      {activeTab === "extraction" && (
+      {/* SCADA Simulation Workspace Render */}
+      {activeTab === "simulation" && (
         <div className="w-full h-full pt-12 pb-1">
-          <ExtractionWorkspace />
+          <SimulationWorkspace />
         </div>
       )}
+
+      {/* AI Extraction & Correction Workspace Render — always mounted to preserve extraction state across tab switches */}
+      <div className="w-full h-full pt-12 pb-1" style={{ display: activeTab === "extraction" ? "flex" : "none" }}>
+        <ExtractionWorkspace />
+      </div>
 
     </div>
   );

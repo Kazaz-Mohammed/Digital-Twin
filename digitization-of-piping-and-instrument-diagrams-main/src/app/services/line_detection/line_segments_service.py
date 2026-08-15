@@ -65,44 +65,45 @@ def detect_line_segments(pid_id: str,
 
     output_line_segments = []
 
-    for line in hough_results_line_segments:
-        x1, y1, x2, y2 = line[0]
+    if hough_results_line_segments is not None:
+        for line in hough_results_line_segments:
+            x1, y1, x2, y2 = line[0]
 
-        '''sorting start and end points of the line segment such that
-        left most point is start and right most is end for horizontal lines
-        and top most point is start and bottom most is end for vertical lines
-        this will help with line flow'''
-        # Check if the line segment is horizontal
-        if y1 == y2:
-            if x1 > x2:
-                x1, x2 = x2, x1
-                y1, y2 = y2, y1
-        # Check if the line segment is vertical
-        elif x1 == x2:
-            if y1 > y2:
-                x1, x2 = x2, x1
-                y1, y2 = y2, y1
-        # The line segment is angled
-        else:
-            if x1 > x2:
-                x1, x2 = x2, x1
-                y1, y2 = y2, y1
-            elif x1 == x2 and y1 > y2:
-                x1, x2 = x2, x1
-                y1, y2 = y2, y1
+            '''sorting start and end points of the line segment such that
+            left most point is start and right most is end for horizontal lines
+            and top most point is start and bottom most is end for vertical lines
+            this will help with line flow'''
+            # Check if the line segment is horizontal
+            if y1 == y2:
+                if x1 > x2:
+                    x1, x2 = x2, x1
+                    y1, y2 = y2, y1
+            # Check if the line segment is vertical
+            elif x1 == x2:
+                if y1 > y2:
+                    x1, x2 = x2, x1
+                    y1, y2 = y2, y1
+            # The line segment is angled
+            else:
+                if x1 > x2:
+                    x1, x2 = x2, x1
+                    y1, y2 = y2, y1
+                elif x1 == x2 and y1 > y2:
+                    x1, x2 = x2, x1
+                    y1, y2 = y2, y1
 
-        '''include lines that are within defined
-        bounding box's coordinates (topX, topY, bottomX and bottomY)
-        to avoid noise for line detection'''
-        if is_data_element_within_bounding_box(bounding_box_inclusive, x1, y1, x2, y2):
-            # Add the detected line to the list of line segments
-            # and also normalise the coordinates
-            output_line_segments.append(LineSegment(
-                startX=x1/image_width,
-                startY=y1/image_height,
-                endX=x2/image_width,
-                endY=y2/image_height
-            ))
+            '''include lines that are within defined
+            bounding box's coordinates (topX, topY, bottomX and bottomY)
+            to avoid noise for line detection'''
+            if is_data_element_within_bounding_box(bounding_box_inclusive, x1, y1, x2, y2):
+                # Add the detected line to the list of line segments
+                # and also normalise the coordinates
+                output_line_segments.append(LineSegment(
+                    startX=x1/image_width,
+                    startY=y1/image_height,
+                    endX=x2/image_width,
+                    endY=y2/image_height
+                ))
 
     end = time.perf_counter()
 

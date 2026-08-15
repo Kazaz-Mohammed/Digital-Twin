@@ -145,10 +145,10 @@ def run_vision_agent_pipeline(
     tiles: List[Tuple[np.ndarray, int, int, int, int]],
     annotated_full_image: np.ndarray
 ) -> List[Dict[str, Any]]:
-    """
-    Main vision agent pipeline that orchestrates the tile-by-tile analysis
-    and the global reconciliation to trace P&ID connectivity.
-    """
+    if not GEMINI_API_KEY:
+        logger.warning("GEMINI_API_KEY is not set. Skipping Gemini VLM topology pipeline.")
+        return []
+        
     w = image_details.width
     h = image_details.height
     
