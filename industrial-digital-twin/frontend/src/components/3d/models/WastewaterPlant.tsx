@@ -1,7 +1,7 @@
 'use client';
 
 import { useFBX } from '@react-three/drei';
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 
 export default function WastewaterPlant() {
@@ -45,11 +45,17 @@ export default function WastewaterPlant() {
     });
   }, [fbx]);
 
+
+
   return (
     <primitive 
       object={fbx} 
       scale={1}
       position={[0, 0, 0]} 
+      onClick={(e: any) => {
+        e.stopPropagation();
+        console.log(`CLICKED_EQUIPMENT_COORD: [${e.point.x.toFixed(2)}, ${e.point.y.toFixed(2)}, ${e.point.z.toFixed(2)}]`);
+      }}
     />
   );
 }

@@ -161,19 +161,12 @@ function DashboardContent() {
           <nav className="flex flex-col space-y-4 w-full px-2">
             {[
               { id: "overview", label: "Overview", icon: <IconOverview /> },
-              { id: "assets", label: "Assets", icon: <IconAssets /> },
-              { id: "analytics", label: "Analytics", icon: <IconAnalytics /> },
-              { id: "reports", label: "Reports", icon: <IconReports /> },
-              { id: "settings", label: "Settings", icon: <IconSettings /> },
             ].map((menu) => (
               <button
                 key={menu.id}
                 onClick={() => {
                   setActiveMenu(menu.id);
-                  if (menu.id === "assets") setActiveTab("2d");
-                  else if (menu.id === "analytics") setActiveTab("graph");
-                  else if (menu.id === "reports") setActiveTab("extraction");
-                  else setActiveTab("3d");
+                  setActiveTab("3d");
                 }}
                 className={`w-full py-3 rounded-lg flex flex-col items-center justify-center text-[8px] uppercase tracking-wider font-bold transition-all gap-1.5 ${
                   activeMenu === menu.id
@@ -298,7 +291,7 @@ function DashboardContent() {
           {/* Lower Workspace Layout Grid */}
           <div className="flex-1 grid grid-cols-12 gap-3 min-h-0">
             
-            {/* Left Column: AAS Tree & View Controls Separated */}
+            {/* Left Column: AAS Tree */}
             <div className="col-span-3 flex flex-col gap-3 min-h-0">
               <div 
                 onDoubleClick={() => setExpandedPanel("aas")}
@@ -307,7 +300,7 @@ function DashboardContent() {
               >
                 <AasAssetTree />
               </div>
-              <div className="h-32 min-h-0">
+              <div className="h-16 min-h-0">
                 <ViewControls />
               </div>
             </div>
@@ -315,7 +308,7 @@ function DashboardContent() {
             {/* Center Column: 3D Visualization */}
             <div className="col-span-6 dashboard-panel flex flex-col min-h-0 relative p-0 overflow-hidden">
               <div className="flex-1 bg-black/40 rounded overflow-hidden relative">
-                <VisualizerCanvas />
+                {expandedPanel !== "3d" && <VisualizerCanvas />}
               </div>
             </div>
 
@@ -363,7 +356,7 @@ function DashboardContent() {
                 ✕
               </button>
 
-              <div className="flex-1 min-h-0 pt-4">
+              <div className="flex-1 min-h-0 pt-4 flex flex-col">
                 {expandedPanel === "aas" && (
                   <div className="h-full overflow-y-auto">
                     <AasAssetTree />
@@ -385,7 +378,7 @@ function DashboardContent() {
                   </div>
                 )}
                 {expandedPanel === "3d" && (
-                  <div className="h-full relative bg-black/40 rounded overflow-hidden">
+                  <div className="flex-1 w-full relative bg-black/40 rounded overflow-hidden">
                     <VisualizerCanvas />
                   </div>
                 )}

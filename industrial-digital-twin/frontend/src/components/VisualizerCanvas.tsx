@@ -14,7 +14,7 @@ const IconFullscreen = () => (
 );
 
 export default function VisualizerCanvas() {
-  const { selectedAsset, setSelectedAsset, activeTab, setActiveTab, expandedPanel, setExpandedPanel, telemetry } = useDigitalTwin();
+  const { selectedAsset, setSelectedAsset, activeTab, setActiveTab, expandedPanel, setExpandedPanel, telemetry, simStatus } = useDigitalTwin();
 
   const [activePopup, setActivePopup] = React.useState<string | null>(null);
 
@@ -27,6 +27,19 @@ export default function VisualizerCanvas() {
   const tankLevel = Math.round(telemetry.temp);
   const pressureValue = (telemetry.press * 10).toFixed(0);
   const flowValue = (telemetry.flow / 10).toFixed(0);
+
+  // Dynamic status mappings from actual backend state
+  const pmp001Running = simStatus ? simStatus.pmp001_speed > 0 : true;
+  const pmp002Running = simStatus ? simStatus.pmp002_speed > 0 : false;
+  const v001Open = simStatus ? simStatus.v001_open : true;
+
+  const pmp001Color = pmp001Running ? "#10b981" : "#7e8a97";
+  const pmp001Stroke = pmp001Running ? "#047857" : "#475569";
+  const pmp002Color = pmp002Running ? "#10b981" : "#cbd5e1";
+  const pmp002Stroke = pmp002Running ? "#047857" : "#64748b";
+  const valveColor = v001Open ? "#10b981" : "#ef4444";
+  const valveStroke = v001Open ? "#047857" : "#991b1b";
+  const pmp002PipeColor = (pmp002Running && v001Open) ? "#10b981" : "#7e8a97";
 
   // Close popup if clicking on the background
   const handleSvgClick = () => {
@@ -88,21 +101,21 @@ export default function VisualizerCanvas() {
 
             {/* PIPES (ISA standard process lines - dynamically colored based on status) */}
             {/* Source to PMP-001 (Running -> Green) */}
-            <line x1="80" y1="180" x2="182" y2="180" stroke="#10b981" strokeWidth="4" />
+            <line x1="80" y1="180" x2="182" y2="180" stroke={pmp001Color} strokeWidth="4" />
             {/* PMP-001 to Tank (Running -> Green) */}
-            <line x1="220" y1="167" x2="430" y2="167" stroke="#10b981" strokeWidth="4" />
+            <line x1="220" y1="167" x2="430" y2="167" stroke={pmp001Color} strokeWidth="4" />
             {/* PIT-001 branch line (Running -> Green) */}
-            <line x1="320" y1="167" x2="320" y2="140" stroke="#10b981" strokeWidth="2.5" />
+            <line x1="320" y1="167" x2="320" y2="140" stroke={pmp001Color} strokeWidth="2.5" />
 
             {/* Tank to V-001 (Running/Open -> Green) */}
-            <path d="M 510 200 L 540 200 L 540 220 L 600 220" fill="none" stroke="#10b981" strokeWidth="4" />
+            <path d="M 510 200 L 540 200 L 540 220 L 600 220" fill="none" stroke={v001Open ? "#10b981" : "#7e8a97"} strokeWidth="4" />
             {/* V-001 to PMP-002 (Running/Open -> Green) */}
-            <line x1="630" y1="220" x2="682" y2="220" stroke="#10b981" strokeWidth="4" />
+            <line x1="630" y1="220" x2="682" y2="220" stroke={v001Open ? "#10b981" : "#7e8a97"} strokeWidth="4" />
 
             {/* PMP-002 to FIT-001 (Stopped/Idle -> Light Gray) */}
-            <line x1="720" y1="207" x2="850" y2="207" stroke="#7e8a97" strokeWidth="4" />
+            <line x1="720" y1="207" x2="850" y2="207" stroke={pmp002PipeColor} strokeWidth="4" />
             {/* FIT-001 branch line (Stopped/Idle -> Light Gray) */}
-            <line x1="790" y1="207" x2="790" y2="138" stroke="#7e8a97" strokeWidth="2.5" />
+            <line x1="790" y1="207" x2="790" y2="138" stroke={pmp002PipeColor} strokeWidth="2.5" />
 
             {/* Instrument connection lines for LIT, LAH, LAL (Vertical Stack) */}
             <line x1="510" y1="144" x2="525" y2="144" stroke="#7e8a97" strokeWidth="1.5" />
@@ -116,14 +129,14 @@ export default function VisualizerCanvas() {
             <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[0]); togglePopup("PMP-001", e); }} className="cursor-pointer group">
               {/* Status Box (Above Asset) */}
               <rect x="145" y="113" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
-              <text x="200" y="129" fill="#10b981" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATUS: RUNNING</text>
+              <text x="200" y="129" fill={pmp001Running ? "#10b981" : "#ef4444"} fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`STATUS: ${pmp001Running ? "RUNNING" : "STOPPED"}`}</text>
 
               {/* Pump Stand Base */}
-              <path d="M 191 195 L 209 195 L 216 204 L 184 204 Z" fill="#10b981" stroke="#047857" strokeWidth="2" />
+              <path d="M 191 195 L 209 195 L 216 204 L 184 204 Z" fill={pmp001Color} stroke={pmp001Stroke} strokeWidth="2" />
               {/* Pump Tangential Nozzle */}
-              <path d="M 200 162 L 220 162 L 220 172 L 198 172 Z" fill="#10b981" stroke="#047857" strokeWidth="1.5" />
+              <path d="M 200 162 L 220 162 L 220 172 L 198 172 Z" fill={pmp001Color} stroke={pmp001Stroke} strokeWidth="1.5" />
               {/* Casing Circle */}
-              <circle cx="200" cy="180" r="18" fill="#10b981" stroke="#047857" strokeWidth="3" />
+              <circle cx="200" cy="180" r="18" fill={pmp001Color} stroke={pmp001Stroke} strokeWidth="3" />
               <text x="200" y="222" fill="#000000" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">PMP-001</text>
 
               {/* Pump Parameters Specifications Box */}
@@ -228,10 +241,10 @@ export default function VisualizerCanvas() {
             <g onClick={() => setSelectedAsset(AAS_PLANT_NODES[3])} className="cursor-pointer group">
               {/* Valve Status display box (Above Asset) */}
               <rect x="560" y="153" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
-              <text x="615" y="169" fill="#10b981" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATE: OPEN</text>
+              <text x="615" y="169" fill={valveColor} fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`STATE: ${v001Open ? "OPEN" : "CLOSED"}`}</text>
 
               {/* Bowtie valve symbol */}
-              <path d="M 600 210 L 630 230 L 630 210 L 600 230 Z" fill="#10b981" stroke="#047857" strokeWidth="2.5" />
+              <path d="M 600 210 L 630 230 L 630 210 L 600 230 Z" fill={valveColor} stroke={valveStroke} strokeWidth="2.5" />
               {/* Actuator diaphragm dome */}
               <line x1="615" y1="220" x2="615" y2="200" stroke="#000000" strokeWidth="2" />
               <rect x="605" y="195" width="20" height="6" fill="#ffffff" stroke="#000000" strokeWidth="1.5" />
@@ -242,14 +255,14 @@ export default function VisualizerCanvas() {
             <g onClick={(e) => { setSelectedAsset(AAS_PLANT_NODES[4]); togglePopup("PMP-002", e); }} className="cursor-pointer group">
               {/* Status Box (Above Asset) */}
               <rect x="645" y="113" width="110" height="24" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" rx="2" />
-              <text x="700" y="129" fill="#64748b" fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">STATUS: IDLE</text>
+              <text x="700" y="129" fill={pmp002Running ? "#10b981" : "#64748b"} fontSize="10" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">{`STATUS: ${pmp002Running ? "RUNNING" : "IDLE"}`}</text>
 
               {/* Pump Stand Base */}
-              <path d="M 691 235 L 709 235 L 716 244 L 684 244 Z" fill="#cbd5e1" stroke="#64748b" strokeWidth="1.5" />
+              <path d="M 691 235 L 709 235 L 716 244 L 684 244 Z" fill={pmp002Color} stroke={pmp002Stroke} strokeWidth="1.5" />
               {/* Pump Tangential Nozzle */}
-              <path d="M 700 202 L 720 202 L 720 212 L 698 212 Z" fill="#cbd5e1" stroke="#64748b" strokeWidth="1.5" />
+              <path d="M 700 202 L 720 202 L 720 212 L 698 212 Z" fill={pmp002Color} stroke={pmp002Stroke} strokeWidth="1.5" />
               {/* Casing Circle */}
-              <circle cx="700" cy="220" r="18" fill="#cbd5e1" stroke="#64748b" strokeWidth="2" />
+              <circle cx="700" cy="220" r="18" fill={pmp002Color} stroke={pmp002Stroke} strokeWidth="2" />
               <text x="700" y="262" fill="#000000" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">PMP-002</text>
 
               {/* Pump Parameters Specifications Box */}
@@ -285,9 +298,15 @@ export default function VisualizerCanvas() {
                   {activePopup === "PMP-001" && (
                     <>
                       <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">PMP-001 Live Stats</div>
-                      <div className="flex justify-between"><span>Speed:</span><span className="font-mono font-bold text-green-600">1450 RPM</span></div>
-                      <div className="flex justify-between"><span>Temp:</span><span className="font-mono font-bold text-blue-600">{telemetry.temp.toFixed(1)} °C</span></div>
-                      <div className="flex justify-between"><span>Power:</span><span className="font-mono font-bold text-amber-600">2.1 kW</span></div>
+                      <div className="flex justify-between"><span>Speed:</span><span className="font-mono font-bold text-green-600">
+                        {simStatus ? simStatus.pmp001?.speed_rpm.toFixed(0) : "0"} RPM
+                      </span></div>
+                      <div className="flex justify-between"><span>Temp:</span><span className="font-mono font-bold text-blue-600">
+                        {simStatus ? simStatus.pmp001?.temperature_c.toFixed(1) : "25.0"} °C
+                      </span></div>
+                      <div className="flex justify-between"><span>Power:</span><span className="font-mono font-bold text-amber-600">
+                        {simStatus ? simStatus.pmp001?.power_kw.toFixed(2) : "0.00"} kW
+                      </span></div>
                     </>
                   )}
                   {activePopup === "PIT-001" && (
@@ -312,9 +331,15 @@ export default function VisualizerCanvas() {
                   {activePopup === "PMP-002" && (
                     <>
                       <div className="font-bold text-blue-800 mb-1 border-b border-gray-300 pb-1">PMP-002 Live Stats</div>
-                      <div className="flex justify-between"><span>Speed:</span><span className="font-mono font-bold text-gray-500">0 RPM</span></div>
-                      <div className="flex justify-between"><span>Status:</span><span className="font-mono font-bold text-red-600">IDLE</span></div>
-                      <div className="flex justify-between"><span>Flow:</span><span className="font-mono font-bold text-blue-600">0.0 L/s</span></div>
+                      <div className="flex justify-between"><span>Speed:</span><span className="font-mono font-bold text-green-600">
+                        {simStatus ? simStatus.pmp002?.speed_rpm.toFixed(0) : "0"} RPM
+                      </span></div>
+                      <div className="flex justify-between"><span>Status:</span><span className={`font-mono font-bold ${pmp002Running ? "text-green-600" : "text-gray-500"}`}>
+                        {pmp002Running ? "RUNNING" : "IDLE"}
+                      </span></div>
+                      <div className="flex justify-between"><span>Flow:</span><span className="font-mono font-bold text-blue-600">
+                        {simStatus ? simStatus.fit001_flow.toFixed(1) : "0.0"} L/s
+                      </span></div>
                     </>
                   )}
                   {activePopup === "FIT-001" && (
@@ -376,7 +401,7 @@ export default function VisualizerCanvas() {
 
       {/* SCADA Simulation Workspace Render */}
       {activeTab === "simulation" && (
-        <div className="w-full h-full pt-12 pb-1">
+        <div className="absolute inset-0 pt-12 pb-1">
           <SimulationWorkspace />
         </div>
       )}

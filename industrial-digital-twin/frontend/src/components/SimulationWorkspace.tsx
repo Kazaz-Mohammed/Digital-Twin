@@ -35,9 +35,11 @@ export default function SimulationWorkspace() {
 
   const fetchState = async (skipConfigUpdate = false) => {
     try {
+      console.log("SimulationWorkspace: Fetching state from backend...");
       const resStatus = await fetch('http://localhost:8000/api/simulation/status');
       if (!resStatus.ok) throw new Error('DCS server unreachable');
       const dataStatus = await resStatus.json();
+      console.log("SimulationWorkspace: Received state:", dataStatus);
       setStatus(dataStatus);
       setErrorStatus(null);
       
@@ -55,6 +57,7 @@ export default function SimulationWorkspace() {
         });
       }
     } catch (e: any) {
+      console.error("SimulationWorkspace: Fetch error:", e);
       setErrorStatus('DCS Controller Offline. Verify Python backend status.');
     }
   };
@@ -175,6 +178,7 @@ export default function SimulationWorkspace() {
     } catch (e) {}
   };
 
+  console.log("SimulationWorkspace Render: status=", status, "errorStatus=", errorStatus);
   return (
     <div className="w-full h-full bg-slate-950 text-slate-100 overflow-y-auto p-6 pt-16 space-y-6">
       

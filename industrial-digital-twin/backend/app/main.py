@@ -1,6 +1,10 @@
 import asyncio
 import random
 import time
+import json
+import csv
+import os
+import paho.mqtt.client as mqtt
 from typing import List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -714,7 +718,160 @@ async def telemetry_stream(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
 
-# --- SIMULATION MOCK ENDPOINTS ---
+# --- MQTT and CSV Player Setup ---
+MQTT_BROKER = "127.0.0.1"
+MQTT_PORT = 1883
+RAW_TOPIC = "industrial/sensors/raw"
+CONTEXT_TOPIC = "industrial/sensors/contextualized"
+
+mqtt_client = mqtt.Client()
+sensor_file_path = r"c:\Users\Asus\Desktop\pid extraction\sensor.csv\sensor.csv"
+sensor_file_handle = None
+sensor_csv_reader = None
+
+def get_next_sensor_row():
+    global sensor_file_handle, sensor_csv_reader
+    if not os.path.exists(sensor_file_path):
+        print(f"MQTT Simulator: Kaggle sensor.csv not found at {sensor_file_path}")
+        return None
+    try:
+        if sensor_file_handle is None:
+            print(f"MQTT Simulator: Opening {sensor_file_path} for streaming...")
+            sensor_file_handle = open(sensor_file_path, mode="r", encoding="utf-8")
+            sensor_csv_reader = csv.DictReader(sensor_file_handle)
+        
+        row = next(sensor_csv_reader, None)
+        if row is None:
+            print("MQTT Simulator: Reached EOF of sensor.csv. Rewinding to start.")
+            sensor_file_handle.seek(0)
+            sensor_file_handle.readline() # Skip header line
+            sensor_csv_reader = csv.DictReader(sensor_file_handle)
+            row = next(sensor_csv_reader, None)
+        return row
+    except Exception as e:
+        print(f"MQTT Simulator: Error reading sensor.csv: {e}")
+        return None
+
+def on_connect(client, userdata, flags, rc):
+    print(f"MQTT: Connected to broker on port {MQTT_PORT} with code {rc}")
+    client.subscribe(CONTEXT_TOPIC)
+
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload.decode())
+        # Update sim_state with contextualized data from Node-RED
+        if "pmp001" in payload:
+            p1 = payload["pmp001"]
+            sim_state.pmp001_rpm = float(p1.get("speed_rpm", sim_state.pmp001_rpm))
+            sim_state.pmp001_temp = float(p1.get("temperature_c", sim_state.pmp001_temp))
+            sim_state.pmp001_power = float(p1.get("power_kw", sim_state.pmp001_power))
+            sim_state.pmp001_current = float(p1.get("current_a", getattr(sim_state, "pmp001_current", 0.0)))
+            sim_state.pmp001_bearing_wear = bool(p1.get("anomaly_detected", sim_state.pmp001_bearing_wear))
+        if "pmp002" in payload:
+            p2 = payload["pmp002"]
+            sim_state.pmp002_rpm = float(p2.get("speed_rpm", sim_state.pmp002_rpm))
+            sim_state.pmp002_temp = float(p2.get("temperature_c", sim_state.pmp002_temp))
+            sim_state.pmp002_power = float(p2.get("power_kw", sim_state.pmp002_power))
+            sim_state.pmp002_current = float(p2.get("current_a", getattr(sim_state, "pmp002_current", 0.0)))
+            sim_state.pmp002_press = float(p2.get("pressure_bar", getattr(sim_state, "pmp002_press", 0.0)))
+        if "tank" in payload:
+            t = payload["tank"]
+            sim_state.tank_level = float(t.get("level_liters", sim_state.tank_level))
+            sim_state.lit001_pct = float(t.get("level_pct", sim_state.lit001_pct))
+            sim_state.pit001_pressure = float(t.get("pressure_bar", sim_state.pit001_pressure))
+            sim_state.fit001_flow = float(t.get("flow_l_s", sim_state.fit001_flow))
+    except Exception as e:
+        print(f"MQTT: Error parsing message on topic {msg.topic}: {e}")
+
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+
+async def publish_telemetry_loop():
+    while True:
+        try:
+            row = get_next_sensor_row()
+            if row:
+                timestamp = row.get("timestamp")
+                machine_status = row.get("machine_status", "NORMAL")
+                
+                # Dynamic scaling multipliers from user panel
+                mult1 = sim_state.pmp001_speed / 100.0
+                mult2 = sim_state.pmp002_speed / 100.0 if (sim_state.v001_open and sim_state.tank_level > 0) else 0.0
+                
+                # Parse numeric values from columns safely
+                def safe_float(key, fallback=0.0):
+                    val = row.get(key)
+                    if val is None or val == "":
+                        return fallback
+                    try:
+                        return float(val)
+                    except ValueError:
+                        return fallback
+                
+                # Map sensors:
+                p1_data = {
+                    "timestamp": timestamp,
+                    "power_kw": safe_float("sensor_06") * 0.1 * mult1,
+                    "voltage_v": safe_float("sensor_10") * 10.0 if mult1 > 0 else 0.0,
+                    "current_a": safe_float("sensor_06") * mult1,
+                    "speed_rpm": safe_float("sensor_38") * 35.0 * mult1,
+                    "temperature_c": safe_float("sensor_02") if mult1 > 0 else 25.0,
+                    "pressure_bar": safe_float("sensor_00") * mult1,
+                    "machine_status": machine_status
+                }
+                
+                p2_data = {
+                    "timestamp": timestamp,
+                    "power_kw": safe_float("sensor_07") * 0.1 * mult2,
+                    "voltage_v": safe_float("sensor_11") * 10.0 if mult2 > 0 else 0.0,
+                    "current_a": safe_float("sensor_07") * mult2,
+                    "speed_rpm": safe_float("sensor_39") * 35.0 * mult2,
+                    "temperature_c": safe_float("sensor_03") if mult2 > 0 else 25.0,
+                    "pressure_bar": safe_float("sensor_01") * mult2
+                }
+                
+                # Write CSV values straight into sim_state as a fallback.
+                # (If Node-RED is running, it will overwrite these values instantly via MQTT).
+                sim_state.pmp001_rpm = p1_data["speed_rpm"]
+                sim_state.pmp001_temp = p1_data["temperature_c"]
+                sim_state.pmp001_power = p1_data["power_kw"]
+                sim_state.pmp001_current = p1_data["current_a"]
+                
+                sim_state.pmp002_rpm = p2_data["speed_rpm"]
+                sim_state.pmp002_temp = p2_data["temperature_c"]
+                sim_state.pmp002_power = p2_data["power_kw"]
+                sim_state.pmp002_current = p2_data["current_a"]
+                sim_state.pmp002_press = p2_data["pressure_bar"]
+                sensor_level = safe_float("sensor_04", 500.0)
+
+                raw_payload = {
+                    "pmp001": p1_data,
+                    "pmp002": p2_data,
+                    "tank": {
+                        "level_liters": sensor_level,
+                        "v001_open": sim_state.v001_open
+                    }
+                }
+                
+                if mqtt_client.is_connected():
+                    mqtt_client.publish(RAW_TOPIC, json.dumps(raw_payload))
+            
+        except Exception as e:
+            print(f"MQTT Publisher: Error: {e}")
+            
+        await asyncio.sleep(1.0)
+
+@app.on_event("startup")
+async def startup_event():
+    # Warm up file handle
+    get_next_sensor_row()
+    try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mqtt_client.loop_start()
+        print("MQTT Client started loop.")
+    except Exception as e:
+        print(f"MQTT Startup: Broker connection failed: {e}")
+    asyncio.create_task(publish_telemetry_loop())
 
 class MockSimulation:
     def __init__(self):
@@ -742,6 +899,14 @@ class MockSimulation:
         self.pmp001_bearing_wear = False
         self.pmp001_rpm = 750.0
         self.pmp001_temp = 35.0
+        self.pmp001_power = 2.0
+        self.pmp001_current = 3.0
+        
+        self.pmp002_rpm = 600.0
+        self.pmp002_temp = 32.0
+        self.pmp002_power = 1.6
+        self.pmp002_current = 2.4
+        self.pmp002_press = 1.2
         
         self.history = []
         
@@ -876,21 +1041,21 @@ async def get_sim_status():
         "pmp002_log_size": getattr(sim_state, "pmp002_log_size", 0),
         "pmp001": {
             "bearing_wear": getattr(sim_state, "pmp001_bearing_wear", False),
-            "speed_rpm": (sim_state.pmp001_speed/100) * sim_state.pmp_max_rpm,
-            "power_kw": (sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp001_bearing_wear", False) else 1.0),
+            "speed_rpm": sim_state.pmp001_rpm,
+            "power_kw": sim_state.pmp001_power,
             "voltage_v": sim_state.pmp_nominal_voltage,
-            "current_a": ((sim_state.pmp001_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp001_speed > 0 else 0,
-            "temperature_c": sim_state.ambient_temp + (sim_state.pmp001_speed/100)*20 + (10 if getattr(sim_state, "pmp001_bearing_wear", False) else 0),
+            "current_a": sim_state.pmp001_current,
+            "temperature_c": sim_state.pmp001_temp,
             "pressure_bar": sim_state.pit001_pressure
         },
         "pmp002": {
             "bearing_wear": getattr(sim_state, "pmp002_bearing_wear", False),
-            "speed_rpm": (sim_state.pmp002_speed/100) * sim_state.pmp_max_rpm,
-            "power_kw": (sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * (1.2 if getattr(sim_state, "pmp002_bearing_wear", False) else 1.0),
+            "speed_rpm": sim_state.pmp002_rpm,
+            "power_kw": sim_state.pmp002_power,
             "voltage_v": sim_state.pmp_nominal_voltage,
-            "current_a": ((sim_state.pmp002_speed/100) * sim_state.pmp_nominal_power * 1000) / (sim_state.pmp_nominal_voltage * 1.732 * 0.85) if sim_state.pmp002_speed > 0 else 0,
-            "temperature_c": sim_state.ambient_temp + (sim_state.pmp002_speed/100)*20 + (10 if getattr(sim_state, "pmp002_bearing_wear", False) else 0),
-            "pressure_bar": 0.0 if not sim_state.v001_open else sim_state.pit001_pressure * 0.5
+            "current_a": sim_state.pmp002_current,
+            "temperature_c": sim_state.pmp002_temp,
+            "pressure_bar": sim_state.pmp002_press
         }
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
+import { SimStatus } from "../types/simulation";
 
 export interface AssetNode {
   id: string;
@@ -112,6 +113,13 @@ interface DigitalTwinContextProps {
   setUploadedModel: (model: any) => void;
   uploadedModelName: string | null;
   setUploadedModelName: (name: string | null) => void;
+
+  // Camera controls
+  cameraAction: { type: string; timestamp: number } | null;
+  triggerCameraAction: (type: string) => void;
+
+  // Unified Simulation Status
+  simStatus: SimStatus | null;
 }
 
 const DigitalTwinContext = createContext<DigitalTwinContextProps | undefined>(undefined);
@@ -150,36 +158,42 @@ export function DigitalTwinProvider({ children }: { children: React.ReactNode })
   const [uploadedModel, setUploadedModel] = useState<any>(null);
   const [uploadedModelName, setUploadedModelName] = useState<string | null>(null);
 
-  // Live Telemetry simulation (simulating InfluxDB MQTT data flow)
+
+
+
+
+  // Camera action controls
+  const [cameraAction, setCameraAction] = useState<{ type: string; timestamp: number } | null>(null);
+  const triggerCameraAction = (type: string) => {
+    setCameraAction({ type, timestamp: Date.now() });
+  };
+
+  // Unified simulation status state
+  const [simStatus, setSimStatus] = useState<SimStatus | null>(null);
+
+  // Poll backend simulation status every 1 second
   useEffect(() => {
-    if (!isLoggedIn) return;
-    const interval = setInterval(() => {
-      setTelemetry((prev) => {
-        const isWarning = selectedAsset.tag === "TK-001";
-        const tempVar = (Math.random() - 0.5) * 1.5;
-        const pressVar = (Math.random() - 0.5) * 0.4;
-        
-        let newTemp = prev.temp + tempVar;
-        let newPress = prev.press + pressVar;
-
-        if (isWarning) {
-          newTemp = Math.min(85, Math.max(74, newTemp));
-          newPress = Math.min(11, Math.max(8.5, newPress));
-        } else {
-          newTemp = Math.min(50, Math.max(38, newTemp));
-          newPress = Math.min(5.5, Math.max(3.5, newPress));
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/simulation/status");
+        if (res.ok) {
+          const data: SimStatus = await res.json();
+          setSimStatus(data);
+          setTelemetry({
+            temp: data.lit001_pct,
+            press: data.pit001_pressure,
+            flow: data.fit001_flow * 10, // Scale by 10 to match VisualizerCanvas logic
+          });
         }
+      } catch (err) {
+        console.error("DigitalTwinContext: Fetch simulation error:", err);
+      }
+    };
 
-        return {
-          temp: parseFloat(newTemp.toFixed(1)),
-          press: parseFloat(newPress.toFixed(2)),
-          flow: parseFloat((110 + Math.random() * 20).toFixed(1)),
-        };
-      });
-    }, 1200);
-
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 1000);
     return () => clearInterval(interval);
-  }, [isLoggedIn, selectedAsset]);
+  }, []);
 
   // Alert check rules
   useEffect(() => {
@@ -246,6 +260,9 @@ export function DigitalTwinProvider({ children }: { children: React.ReactNode })
       setUploadedModel,
       uploadedModelName,
       setUploadedModelName,
+      cameraAction,
+      triggerCameraAction,
+      simStatus,
     }}>
       {children}
     </DigitalTwinContext.Provider>

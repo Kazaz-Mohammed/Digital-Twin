@@ -1,0 +1,121 @@
+[
+    {
+        "id": "twin-flow-tab",
+        "type": "tab",
+        "label": "Digital Twin Data Contextualization",
+        "disabled": false,
+        "info": "Listens to raw CSV telemetry stream, performs scaling calculations, and feeds data back into the Digital Twin."
+    },
+    {
+        "id": "mqtt-in-raw",
+        "type": "mqtt in",
+        "z": "twin-flow-tab",
+        "name": "Subscribe Raw Sensors",
+        "topic": "industrial/sensors/raw",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "mqtt-broker-local",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 160,
+        "y": 140,
+        "wires": [
+            [
+                "calc-context-node",
+                "debug-raw-sensors"
+            ]
+        ]
+    },
+    {
+        "id": "calc-context-node",
+        "type": "function",
+        "z": "twin-flow-tab",
+        "name": "Data Contextualizer",
+        "func": "// Parse incoming raw telemetry values\nvar raw = msg.payload;\nvar p1 = raw.pmp001 || {};\nvar p2 = raw.pmp002 || {};\nvar raw_tank = raw.tank || {};\n\n// 1. Contextualize Pump 1 (Inlet)\nvar pmp001_rpm = p1.speed_rpm || 0;\nvar pmp001_temp = p1.temperature_c || 25.0;\nvar pmp001_power = p1.power_kw || 0;\nvar pmp001_current = p1.current_a || 0;\n// Simulate anomaly: alert if temperature exceeds 78 degrees Celsius\nvar anomaly = pmp001_temp > 78.0;\n\n// 2. Contextualize Pump 2 (Outlet)\nvar pmp002_rpm = p2.speed_rpm || 0;\nvar pmp002_temp = p2.temperature_c || 25.0;\nvar pmp002_power = p2.power_kw || 0;\nvar pmp002_current = p2.current_a || 0;\n// Calculate pressure based on active RPM speed\nvar pmp002_press = (pmp002_rpm / 1500.0) * 8.0;\n\n// 3. Contextualize Tank Level, Pressure, and dynamic flows\nvar level_liters = raw_tank.level_liters || 500.0;\nvar level_pct = (level_liters / 1000.0) * 100.0;\n\n// Dynamic P&ID indicators calculations\nvar pressure_bar = 2.0 + (pmp001_rpm / 1500.0) * 1.5 + (Math.random() - 0.5) * 0.1;\nvar flow_l_s = 0.0;\nif (pmp002_rpm > 0 && raw_tank.v001_open && level_liters > 10) {\n    flow_l_s = (pmp002_rpm / 1500.0) * 30.0 + (Math.random() - 0.5) * 0.5;\n}\n\n// Format output payload\nmsg.payload = {\n    \"pmp001\": {\n        \"speed_rpm\": pmp001_rpm,\n        \"temperature_c\": pmp001_temp,\n        \"power_kw\": pmp001_power,\n        \"current_a\": pmp001_current,\n        \"anomaly_detected\": anomaly\n    },\n    \"pmp002\": {\n        \"speed_rpm\": pmp002_rpm,\n        \"temperature_c\": pmp002_temp,\n        \"power_kw\": pmp002_power,\n        \"current_a\": pmp002_current,\n        \"pressure_bar\": pmp002_press\n    },\n    \"tank\": {\n        \"level_liters\": level_liters,\n        \"level_pct\": level_pct,\n        \"pressure_bar\": pressure_bar,\n        \"flow_l_s\": Math.max(0, flow_l_s)\n    }\n};\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 140,
+        "wires": [
+            [
+                "mqtt-out-context",
+                "debug-context-telemetry"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt-out-context",
+        "type": "mqtt out",
+        "z": "twin-flow-tab",
+        "name": "Publish Contextualized",
+        "topic": "industrial/sensors/contextualized",
+        "qos": "0",
+        "retain": "false",
+        "broker": "mqtt-broker-local",
+        "x": 680,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "mqtt-broker-local",
+        "type": "mqtt-broker",
+        "name": "Mosquitto Local Broker",
+        "broker": "127.0.0.1",
+        "port": "1883",
+        "clientid": "node-red-digital-twin",
+        "autoConnect": true,
+        "usetls": false,
+        "compatmode": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": ""
+    },
+    {
+        "id": "debug-raw-sensors",
+        "type": "debug",
+        "z": "twin-flow-tab",
+        "name": "Raw Data Log",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 390,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "debug-context-telemetry",
+        "type": "debug",
+        "z": "twin-flow-tab",
+        "name": "Context Data Log",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 670,
+        "y": 60,
+        "wires": []
+    }
+]
