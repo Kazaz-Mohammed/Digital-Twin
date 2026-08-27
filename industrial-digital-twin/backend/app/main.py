@@ -724,6 +724,71 @@ MQTT_PORT = 1883
 RAW_TOPIC = "industrial/sensors/raw"
 CONTEXT_TOPIC = "industrial/sensors/contextualized"
 
+# InfluxDB Configuration
+import urllib.request
+import urllib.error
+
+INFLUX_URL = "http://localhost:8086/api/v2/write?org=jesa&bucket=dts_bucket&precision=s"
+INFLUX_TOKEN = "ccyUPLdoBsKF8tPaDfqf3UR48v00CpVTaQfC7RObSBAx9dR7Kd-dw265Hr9yJiiPW5LS0TMX7VDEyRpjDuClhA=="
+main_loop = None
+
+async def write_influx_async(payload):
+    lines = []
+    now_s = int(time.time())
+    
+    # 1. Pump 1
+    p1 = payload.get("pmp001")
+    if p1:
+        speed = p1.get("speed_rpm", 0.0)
+        temp = p1.get("temperature_c", 0.0)
+        power = p1.get("power_kw", 0.0)
+        current = p1.get("current_a", 0.0)
+        anomaly = 1 if p1.get("anomaly_detected") else 0
+        lines.append(f"pumps,pump_id=PMP-001 speed={speed},temperature={temp},power={power},current={current},anomaly={anomaly} {now_s}")
+        
+    # 2. Pump 2
+    p2 = payload.get("pmp002")
+    if p2:
+        speed = p2.get("speed_rpm", 0.0)
+        temp = p2.get("temperature_c", 0.0)
+        power = p2.get("power_kw", 0.0)
+        current = p2.get("current_a", 0.0)
+        press = p2.get("pressure_bar", 0.0)
+        lines.append(f"pumps,pump_id=PMP-002 speed={speed},temperature={temp},power={power},current={current},pressure={press} {now_s}")
+        
+    # 3. Tank
+    tank = payload.get("tank")
+    if tank:
+        level_liters = tank.get("level_liters", 0.0)
+        level_pct = tank.get("level_pct", 0.0)
+        press = tank.get("pressure_bar", 0.0)
+        flow = tank.get("flow_l_s", 0.0)
+        lines.append(f"tanks,tank_id=TK-001 level_l={level_liters},level_pct={level_pct},pressure={press},flow_out={flow} {now_s}")
+        
+    if not lines:
+        return
+        
+    body = "\n".join(lines).encode("utf-8")
+    
+    def send_req():
+        try:
+            req = urllib.request.Request(
+                INFLUX_URL,
+                data=body,
+                headers={
+                    "Authorization": f"Token {INFLUX_TOKEN}",
+                    "Content-Type": "text/plain; charset=utf-8"
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                response.read()
+        except Exception as e:
+            pass
+            
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, send_req)
+
 mqtt_client = mqtt.Client()
 sensor_file_path = r"c:\Users\Asus\Desktop\pid extraction\sensor.csv\sensor.csv"
 sensor_file_handle = None
@@ -780,6 +845,10 @@ def on_message(client, userdata, msg):
             sim_state.lit001_pct = float(t.get("level_pct", sim_state.lit001_pct))
             sim_state.pit001_pressure = float(t.get("pressure_bar", sim_state.pit001_pressure))
             sim_state.fit001_flow = float(t.get("flow_l_s", sim_state.fit001_flow))
+            
+        # Write to InfluxDB dynamically
+        if main_loop:
+            asyncio.run_coroutine_threadsafe(write_influx_async(payload), main_loop)
     except Exception as e:
         print(f"MQTT: Error parsing message on topic {msg.topic}: {e}")
 
@@ -863,6 +932,8 @@ async def publish_telemetry_loop():
 
 @app.on_event("startup")
 async def startup_event():
+    global main_loop
+    main_loop = asyncio.get_running_loop()
     # Warm up file handle
     get_next_sensor_row()
     try:
