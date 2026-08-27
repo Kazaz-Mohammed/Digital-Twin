@@ -730,9 +730,8 @@ import urllib.error
 
 INFLUX_URL = "http://localhost:8086/api/v2/write?org=jesa&bucket=dts_bucket&precision=s"
 INFLUX_TOKEN = "ccyUPLdoBsKF8tPaDfqf3UR48v00CpVTaQfC7RObSBAx9dR7Kd-dw265Hr9yJiiPW5LS0TMX7VDEyRpjDuClhA=="
-main_loop = None
 
-async def write_influx_async(payload):
+def write_influx_sync(payload):
     lines = []
     now_s = int(time.time())
     
@@ -770,24 +769,21 @@ async def write_influx_async(payload):
         
     body = "\n".join(lines).encode("utf-8")
     
-    def send_req():
-        try:
-            req = urllib.request.Request(
-                INFLUX_URL,
-                data=body,
-                headers={
-                    "Authorization": f"Token {INFLUX_TOKEN}",
-                    "Content-Type": "text/plain; charset=utf-8"
-                },
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=2.0) as response:
-                response.read()
-        except Exception as e:
-            pass
-            
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, send_req)
+    try:
+        req = urllib.request.Request(
+            INFLUX_URL,
+            data=body,
+            headers={
+                "Authorization": f"Token {INFLUX_TOKEN}",
+                "Content-Type": "text/plain; charset=utf-8"
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            response.read()
+        print("InfluxDB: Successfully wrote 1 metric batch.")
+    except Exception as e:
+        print(f"InfluxDB Write Error: {e}")
 
 mqtt_client = mqtt.Client()
 sensor_file_path = r"c:\Users\Asus\Desktop\pid extraction\sensor.csv\sensor.csv"
@@ -846,9 +842,8 @@ def on_message(client, userdata, msg):
             sim_state.pit001_pressure = float(t.get("pressure_bar", sim_state.pit001_pressure))
             sim_state.fit001_flow = float(t.get("flow_l_s", sim_state.fit001_flow))
             
-        # Write to InfluxDB dynamically
-        if main_loop:
-            asyncio.run_coroutine_threadsafe(write_influx_async(payload), main_loop)
+        # Write to InfluxDB dynamically inside background thread
+        write_influx_sync(payload)
     except Exception as e:
         print(f"MQTT: Error parsing message on topic {msg.topic}: {e}")
 
@@ -932,8 +927,6 @@ async def publish_telemetry_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    global main_loop
-    main_loop = asyncio.get_running_loop()
     # Warm up file handle
     get_next_sensor_row()
     try:
